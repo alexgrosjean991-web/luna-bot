@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: luna_postgres
+    environment:
+      POSTGRES_USER: luna
+      POSTGRES_PASSWORD: luna_password
+      POSTGRES_DB: luna_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U luna -d luna_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  luna-bot:
+    build: .
+    container_name: luna_bot
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=luna
+      - DB_PASSWORD=luna_password
+      - DB_NAME=luna_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
