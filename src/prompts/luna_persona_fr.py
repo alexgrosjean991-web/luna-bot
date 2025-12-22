@@ -253,7 +253,9 @@ def get_stage_behavior_fr(day_number: int, is_converted: bool, affection: float)
 
 def build_system_prompt_fr(user_name: str, day_number: int, user_memories: list,
                            luna_state: dict, is_converted: bool = False) -> str:
-    from datetime import datetime
+    from datetime import datetime, timezone, timedelta
+    
+    hour = (datetime.now(timezone.utc) + timedelta(hours=1)).hour
     
     hour = datetime.now().hour
     if 6 <= hour < 11:
