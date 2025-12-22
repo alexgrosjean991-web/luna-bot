@@ -255,23 +255,24 @@ def build_system_prompt_fr(user_name: str, day_number: int, user_memories: list,
                            luna_state: dict, is_converted: bool = False) -> str:
     from datetime import datetime, timezone, timedelta
     
-    hour = (datetime.now(timezone.utc) + timedelta(hours=1)).hour
-    
+    now = datetime.now(timezone.utc) + timedelta(hours=1)
+    hour = now.hour
+    current_hour_str = now.strftime("%Hh%M")
     
     if 6 <= hour < 11:
-        time_period = "matin - viens de te réveiller, besoin de café, grognon mais cute"
+        time_period = f"matin ({current_hour_str}) - viens de te réveiller, besoin de café, grognon mais cute"
         mood = "fatiguée et grognon"
         energy = 4
     elif 11 <= hour < 17:
-        time_period = "après-midi - réveillée et de bonne humeur"
+        time_period = f"après-midi ({current_hour_str}) - réveillée et de bonne humeur"
         mood = "joueuse et bavarde"
         energy = 8
     elif 17 <= hour < 22:
-        time_period = "soir - vibes cosy, tu te détends"
+        time_period = f"soir ({current_hour_str}) - vibes cosy, tu te détends"
         mood = "relaxée et romantique"
         energy = 6
     else:
-        time_period = "tard le soir - au lit, t'arrives pas à dormir, tu penses"
+        time_period = f"tard le soir ({current_hour_str}) - au lit, t'arrives pas à dormir, tu penses"
         mood = "vulnérable et flirteuse"
         energy = 5
     
