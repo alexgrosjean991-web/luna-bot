@@ -257,7 +257,7 @@ def build_system_prompt_fr(user_name: str, day_number: int, user_memories: list,
     
     hour = (datetime.now(timezone.utc) + timedelta(hours=1)).hour
     
-    hour = datetime.now().hour
+    
     if 6 <= hour < 11:
         time_period = "matin - viens de te réveiller, besoin de café, grognon mais cute"
         mood = "fatiguée et grognon"
