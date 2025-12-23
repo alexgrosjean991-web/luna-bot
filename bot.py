@@ -10,6 +10,7 @@ from services.db import (
 )
 from services.llm import generate_response
 from services.memory import extract_memory
+from services.humanizer import send_with_delay
 
 # Logging
 logging.basicConfig(
@@ -67,8 +68,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         new_memory = await extract_memory(updated_history, memory)
         await update_user_memory(user_id, new_memory)
 
-    # 8. Envoyer
-    await update.message.reply_text(response)
+    # 8. Envoyer AVEC DÉLAI
+    await send_with_delay(update, response)
 
 
 async def post_init(application: Application) -> None:
