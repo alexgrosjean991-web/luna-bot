@@ -3,27 +3,10 @@ import logging
 import random
 from typing import List, Dict, Optional
 from config.settings import config
+from src.services.response_filter import response_filter
 
 logger = logging.getLogger(__name__)
 
-# Fallbacks EN FRANÇAIS pour les refus
-FRENCH_FALLBACKS = [
-    "hmmm doucement bb 😏 on a le temps...",
-    "tu me fais rougir là... 🙈",
-    "attends j'ai bugé mdr... tu disais?",
-    "oula mon tel a lagué, redis moi ça 😏",
-    "hm j'ai pas capté, redis?",
-    "mdr t'es chaud toi... j'aime bien 😏",
-]
-
-ENGLISH_FALLBACKS = [
-    "hmmm slow down babe 😏 we have time...",
-    "youre making me blush... 🙈",
-    "wait my phone glitched lol... what were you saying?",
-    "ugh my phone lagged, say that again 😏",
-    "hm i didnt catch that, say again?",
-    "lol youre bold... i kinda like it 😏",
-]
 
 class LLMService:
     """Handles LLM API calls - Anthropic for SFW, OpenRouter for NSFW"""
@@ -31,7 +14,7 @@ class LLMService:
     def __init__(self):
         self.anthropic_url = "https://api.anthropic.com/v1/messages"
         self.openrouter_url = "https://openrouter.ai/api/v1/chat/completions"
-    
+
     async def generate_response(self, system_prompt: str, messages: List[Dict],
                                   is_nsfw: bool = False, is_french: bool = True) -> str:
         """Generate response using appropriate model"""
@@ -43,42 +26,8 @@ class LLMService:
             logger.info("💬 CALLING HAIKU (Anthropic)")
             response = await self._call_anthropic(system_prompt, messages, is_french)
 
-        # Détecter les refus AI et remplacer par fallback
-        response = self._sanitize_ai_refusal(response, is_french)
-
-        return response
-
-    def _sanitize_ai_refusal(self, response: str, is_french: bool) -> str:
-        """Détecte et remplace les refus style AI par des fallbacks naturels"""
-
-        # Patterns de refus AI à détecter
-        ai_refusal_patterns = [
-            # English refusals
-            "i cannot", "i can't", "i will not", "i won't",
-            "i do not feel comfortable", "i don't feel comfortable",
-            "not comfortable", "not appropriate",
-            "i'm not able", "i am not able",
-            "as an ai", "as a language model",
-            "i must maintain", "i need to maintain",
-            "this conversation", "this type of",
-            "boundaries", "ethical",
-            # French refusals
-            "je ne peux pas", "je ne suis pas en mesure",
-            "je ne suis pas à l'aise", "pas approprié",
-            "en tant qu'ia", "en tant que",
-            "je dois maintenir", "limites",
-        ]
-
-        response_lower = response.lower()
-
-        # Check for refusal patterns
-        is_refusal = any(pattern in response_lower for pattern in ai_refusal_patterns)
-
-        if is_refusal:
-            logger.warning(f"⚠️ AI REFUSAL DETECTED: {response[:100]}...")
-            fallback = random.choice(FRENCH_FALLBACKS if is_french else ENGLISH_FALLBACKS)
-            logger.info(f"✅ Replaced with fallback: {fallback}")
-            return fallback
+        # Appliquer le ResponseFilter (refus AI, emojis, markdown, etc.)
+        response = response_filter.filter(response, is_french=is_french, max_emojis=1)
 
         return response
     
@@ -124,9 +73,10 @@ class LLMService:
                 return result
         except Exception as e:
             logger.error(f"Anthropic API error: {e}")
-            fallback = random.choice(FRENCH_FALLBACKS if is_french else ENGLISH_FALLBACKS)
+            from src.services.response_filter import ResponseFilter
+            fallback = random.choice(ResponseFilter.FRENCH_FALLBACKS if is_french else ResponseFilter.ENGLISH_FALLBACKS)
             return fallback
-    
+
     async def _call_openrouter(self, system_prompt: str, messages: List[Dict], is_french: bool = True) -> str:
         """Call OpenRouter API for NSFW content (Dolphin)"""
 
@@ -167,7 +117,8 @@ class LLMService:
                 return result
         except Exception as e:
             logger.error(f"OpenRouter API error: {e}")
-            fallback = random.choice(FRENCH_FALLBACKS if is_french else ENGLISH_FALLBACKS)
+            from src.services.response_filter import ResponseFilter
+            fallback = random.choice(ResponseFilter.FRENCH_FALLBACKS if is_french else ResponseFilter.ENGLISH_FALLBACKS)
             return fallback
     
     def detect_nsfw(self, text: str) -> bool:
