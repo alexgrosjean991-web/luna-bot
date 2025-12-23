@@ -69,7 +69,7 @@ class IntermittentEngine:
     # Délais selon disponibilité (en secondes, additionnels au délai de base)
     DELAY_MODIFIERS = {
         AvailabilityState.AVAILABLE: (0, 0),      # Pas de modification
-        AvailabilityState.SLOW: (60, 180),        # +1-3min
+        AvailabilityState.SLOW: (5, 15),          # +5-15s (réduit pour UX)
         AvailabilityState.EAGER: (-2, -1),        # Réduit le délai
     }
 

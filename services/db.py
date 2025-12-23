@@ -151,6 +151,16 @@ async def init_db() -> None:
             vulnerabilities_shared INTEGER DEFAULT 0
         """)
 
+        # V6: Colonnes pour conversion premium
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            premium_preview_count INTEGER DEFAULT 0
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            conversion_shown_at TIMESTAMP WITH TIME ZONE DEFAULT NULL
+        """)
+
     logger.info("DB connectée")
 
 

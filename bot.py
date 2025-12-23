@@ -4,6 +4,7 @@ import logging
 import time
 import signal
 import sys
+import random
 from collections import defaultdict
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -104,6 +105,12 @@ from services.emotional_peaks import (
     should_trigger_emotional_peak, get_emotional_opener, EMOTIONAL_STATES
 )
 from services.story_arcs import get_story_context
+
+# V6: LLM Router + Conversion
+from services.llm_router import get_llm_config, detect_engagement_signal
+from services import conversion
+from settings import PAYMENT_LINK
+from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ============== MEDIUM FIX: Configurable logging ==============
 import os
@@ -397,11 +404,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 await update_inside_jokes(user_id, [j.to_dict() for j in existing_jokes])
                 break
 
+    # ============== V6: LLM Router ==============
+    teasing_stage = user_data.get("teasing_stage", 0)
+    subscription_status = user_data.get("subscription_status", "trial")
+    provider, model = get_llm_config(day_count, teasing_stage, subscription_status)
+
+    # V6: Track premium preview + check conversion
+    if provider == "openrouter" and subscription_status != "active":
+        preview_count = await conversion.increment_preview_count(user_id)
+        logger.info(f"Premium preview count: {preview_count}")
+
+        # Check if we should show conversion flow
+        if await conversion.should_show_conversion(
+            user_id, day_count, teasing_stage, subscription_status
+        ):
+            await send_conversion_flow(update, context, user_id)
+            return
+
     # 13. Générer réponse
     try:
         response = await generate_response(
             user_text, history, memory, phase, day_count, mood, emotional_state,
-            extra_instructions="\n".join(extra_instructions) if extra_instructions else None
+            extra_instructions="\n".join(extra_instructions) if extra_instructions else None,
+            provider=provider,
+            model_override=model
         )
         metrics.record_llm_call(success=True)
     except Exception as e:
@@ -476,9 +502,55 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception as e:
             logger.error(f"Attachment score update failed: {e}")
 
+    # V6: Update teasing stage based on engagement signals
+    engagement_increment = detect_engagement_signal(user_text)
+    if engagement_increment > 0:
+        new_teasing_stage = min(teasing_stage + engagement_increment, 8)
+        if new_teasing_stage > teasing_stage:
+            await update_teasing_stage(user_id, new_teasing_stage)
+            logger.info(f"Teasing stage updated: {teasing_stage} -> {new_teasing_stage}")
+
     # 17. Envoyer avec délai naturel (+ intermittent delay modifier)
     delay_modifier = intermittent.get_delay_modifier(intermittent_state)
     await send_with_natural_delay(update, response, mood, delay_modifier)
+
+
+async def send_conversion_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
+    """Envoie le flow de conversion naturel vers l'abonnement."""
+    import asyncio
+
+    telegram_id = update.effective_user.id
+
+    # Envoyer les messages de transition
+    messages = conversion.get_transition_messages()
+
+    for msg in messages:
+        await asyncio.sleep(random.uniform(2, 4))
+        await context.bot.send_chat_action(chat_id=telegram_id, action="typing")
+        await asyncio.sleep(random.uniform(1, 2))
+        await context.bot.send_message(chat_id=telegram_id, text=msg)
+        await save_message(user_id, "assistant", msg)
+
+    await asyncio.sleep(2)
+
+    # Envoyer le CTA d'abonnement
+    cta = conversion.get_cta()
+
+    if PAYMENT_LINK:
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(cta["button"], url=PAYMENT_LINK)]
+        ])
+        await context.bot.send_message(
+            chat_id=telegram_id,
+            text=cta["text"],
+            reply_markup=keyboard
+        )
+    else:
+        await context.bot.send_message(chat_id=telegram_id, text=cta["text"])
+
+    # Marquer conversion montrée
+    await conversion.mark_conversion_shown(user_id)
+    logger.info(f"Conversion flow sent to user {user_id}")
 
 
 async def send_proactive_messages(context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -27,14 +27,23 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 if not ANTHROPIC_API_KEY:
     raise ValueError("ANTHROPIC_API_KEY manquant dans .env")
 
-# Constantes LLM
+# Constantes LLM Anthropic
 LLM_MODEL = "claude-3-5-haiku-20241022"
 MAX_TOKENS = 80           # Assez pour une réponse complète
 HISTORY_LIMIT = 20
 ANTHROPIC_API_VERSION = "2023-06-01"  # LOW FIX: API versioning
 
+# OpenRouter (modèle premium)
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+PREMIUM_MODEL = "sao10k/l3.3-euryale-70b"
+MAX_TOKENS_PREMIUM = 150  # Plus de tokens pour contenu premium
+
+# Conversion
+PAYMENT_LINK = os.getenv("PAYMENT_LINK", "")
+TRIAL_DAYS = 5
+
 # Bot version
-BOT_VERSION = "1.0.0"
+BOT_VERSION = "1.1.0"  # V6: Multi-LLM + Conversion
 
 # DB Pool
 DB_POOL_MIN = 2
