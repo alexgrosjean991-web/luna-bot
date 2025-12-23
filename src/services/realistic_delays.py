@@ -79,6 +79,9 @@ EXCUSES_EN = [
 class RealisticDelayService:
     """Service de délais réalistes"""
 
+    # TEST MODE: Set to True for instant responses (debugging)
+    TEST_MODE = True  # TODO: Set to False in production
+
     def __init__(self):
         self._last_response_time: dict = {}  # user_id -> datetime
         self._consecutive_quick: dict = {}   # user_id -> count
@@ -106,6 +109,19 @@ class RealisticDelayService:
         - Historique récent (éviter patterns répétitifs)
         - Mode NSFW/sexting (réponses plus rapides)
         """
+        # TEST MODE: Return instant delays
+        if self.TEST_MODE:
+            return DelayResult(
+                initial_delay=0.5,
+                typing_duration=1.0,
+                between_messages=0.5,
+                pattern=ResponsePattern.INSTANT,
+                typing_pattern=TypingPattern.SIMPLE,
+                should_split=False,
+                split_count=1,
+                add_excuse=False,
+                excuse_text=None
+            )
 
         # Determine base pattern
         pattern = self._determine_pattern(
