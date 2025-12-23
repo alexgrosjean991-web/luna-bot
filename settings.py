@@ -25,5 +25,6 @@ if not ANTHROPIC_API_KEY:
 
 # Constantes
 LLM_MODEL = "claude-3-5-haiku-20241022"
-MAX_TOKENS = 100
+MAX_TOKENS = 60           # Réduit pour forcer réponses courtes
+TEMPERATURE = 0.9         # Plus de personnalité
 HISTORY_LIMIT = 20

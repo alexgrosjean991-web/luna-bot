@@ -2,7 +2,7 @@
 import logging
 import httpx
 from pathlib import Path
-from settings import ANTHROPIC_API_KEY, LLM_MODEL, MAX_TOKENS
+from settings import ANTHROPIC_API_KEY, LLM_MODEL, MAX_TOKENS, TEMPERATURE
 from services.memory import format_memory_for_prompt
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,7 @@ async def generate_response(
     payload = {
         "model": LLM_MODEL,
         "max_tokens": MAX_TOKENS,
+        "temperature": TEMPERATURE,
         "system": system_prompt,
         "messages": messages[-20:]  # Derniers 20 messages
     }
