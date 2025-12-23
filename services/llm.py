@@ -45,7 +45,7 @@ ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 async def call_openrouter(
     messages: list[dict],
     system_prompt: str,
-    model: str = "mistralai/mixtral-8x22b-instruct",
+    model: str = "anthracite-org/magnum-v4-72b",
     max_tokens: int = 60,
     temperature: float = 0.75
 ) -> str:
@@ -77,6 +77,11 @@ async def call_openrouter(
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
+
+    # Debug: log ce qu'on envoie
+    logger.info(f"OpenRouter request: model={model}, max_tokens={max_tokens}, temp={temperature}")
+    logger.info(f"System prompt length: {len(system_prompt)} chars")
+    logger.info(f"Messages count: {len(formatted_messages)}")
 
     last_error = None
 
@@ -209,7 +214,7 @@ async def generate_response(
 
     # ============== ROUTER: OpenRouter pour premium ==============
     if provider == "openrouter":
-        model = model_override or "mistralai/mixtral-8x22b-instruct"
+        model = model_override or "anthracite-org/magnum-v4-72b"
         logger.info(f"Using OpenRouter ({model})")
         return await call_openrouter(
             messages=messages,

@@ -42,22 +42,22 @@ def get_llm_config(
 
     # Abonnés = toujours premium
     if subscription_status == "active":
-        logger.info(f"Router: Mixtral (abonné actif)")
-        return ("openrouter", "mistralai/mixtral-8x22b-instruct")
+        logger.info(f"Router: Magnum (abonné actif)")
+        return ("openrouter", "anthracite-org/magnum-v4-72b")
 
     # J5 soir + engagement élevé = aperçu premium
     if day_count == 5:
         if hour >= 20 and teasing_stage >= 5:
-            logger.info(f"Router: Mixtral (J5 soir, teasing={teasing_stage})")
-            return ("openrouter", "mistralai/mixtral-8x22b-instruct")
+            logger.info(f"Router: Magnum (J5 soir, teasing={teasing_stage})")
+            return ("openrouter", "anthracite-org/magnum-v4-72b")
         if teasing_stage >= 6:
-            logger.info(f"Router: Mixtral (J5, high teasing={teasing_stage})")
-            return ("openrouter", "mistralai/mixtral-8x22b-instruct")
+            logger.info(f"Router: Magnum (J5, high teasing={teasing_stage})")
+            return ("openrouter", "anthracite-org/magnum-v4-72b")
 
     # J6+ non abonné mais très engagé = aperçu limité
     if day_count >= 6 and teasing_stage >= 7:
-        logger.info(f"Router: Mixtral (J{day_count}, very high teasing)")
-        return ("openrouter", "mistralai/mixtral-8x22b-instruct")
+        logger.info(f"Router: Magnum (J{day_count}, very high teasing)")
+        return ("openrouter", "anthracite-org/magnum-v4-72b")
 
     # Default: Haiku
     logger.info(f"Router: Haiku (J{day_count}, teasing={teasing_stage})")
