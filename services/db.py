@@ -70,7 +70,7 @@ async def init_db() -> None:
         # Colonnes pour progression relation
         await conn.execute("""
             ALTER TABLE users ADD COLUMN IF NOT EXISTS
-            phase VARCHAR(20) DEFAULT 'hook'
+            phase VARCHAR(20) DEFAULT 'discovery'
         """)
         await conn.execute("""
             ALTER TABLE users ADD COLUMN IF NOT EXISTS
@@ -79,6 +79,20 @@ async def init_db() -> None:
         await conn.execute("""
             ALTER TABLE users ADD COLUMN IF NOT EXISTS
             day_count INTEGER DEFAULT 1
+        """)
+
+        # Colonnes pour subscription/paywall
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            subscription_status VARCHAR(20) DEFAULT 'trial'
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            paywall_sent BOOLEAN DEFAULT FALSE
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            teasing_stage INTEGER DEFAULT 0
         """)
 
     logger.info("DB connectée")
@@ -219,12 +233,30 @@ async def log_proactive(user_id: int, message_type: str) -> None:
         """, user_id, message_type)
 
 
-# Seuils de phase
+async def get_user_data(user_id: int) -> dict:
+    """Récupère toutes les données utilisateur."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT * FROM users WHERE id = $1
+        """, user_id)
+        return dict(row) if row else {}
+
+
+async def update_teasing_stage(user_id: int, stage: int) -> None:
+    """Met à jour le teasing stage."""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET teasing_stage = $1 WHERE id = $2",
+            stage, user_id
+        )
+
+
+# Seuils de phase (legacy, gardé pour compatibilité)
 PHASE_THRESHOLDS = {
-    "hook": (1, 3),
-    "deepen": (4, 5),
-    "attach": (6, 7),
-    "convert": (8, 999),
+    "discovery": (1, 2),
+    "connection": (3, 4),
+    "attachment": (5, 7),
+    "intimate": (8, 999),
 }
 
 

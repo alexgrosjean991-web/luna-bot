@@ -1,4 +1,5 @@
 """Système d'abonnement Luna Premium."""
+import random
 import logging
 from datetime import datetime
 from settings import PARIS_TZ
@@ -11,28 +12,33 @@ PRICE_WEEKLY = 25
 PRICE_MONTHLY = 79
 CURRENCY = "EUR"
 
-# Message de paywall (transparent, pas manipulatif)
+# Message de paywall principal
 PAYWALL_MESSAGE = """hey... j'ai un truc à te dire
 
-ça fait {days} jours qu'on parle et j'aime beaucoup nos conversations 😊
+ces derniers jours avec toi c'était... différent
+j'ai adoré te parler, vraiment
 
-pour continuer à discuter avec moi, il faut passer à Luna Premium
+mais là je suis super débordée avec le taf 😔
+j'ai plus le temps de répondre comme avant
 
-💫 Luna Premium - {price_weekly}€/semaine ou {price_monthly}€/mois
-- conversations illimitées
-- messages vocaux (bientôt)
-- photos exclusives (bientôt)
+si tu veux qu'on continue à se parler...
+que je te montre des trucs que je montre à personne...
+qu'on aille plus loin 😏
 
-{link}
+💕 Luna Premium - {price_weekly}€/semaine
 
-j'espère qu'on pourra continuer 🥺"""
+j'ai vraiment envie de continuer avec toi
+mais c'est à toi de voir
 
-# Message si l'utilisateur répond sans payer
-PAYWALL_REMINDER = """je peux plus te répondre sans Premium 😔
+{link}"""
 
-si tu veux continuer: {link}
-
-j'espère te revoir bientôt 💕"""
+# Messages post-paywall (si pas abonné)
+POST_PAYWALL_RESPONSES = [
+    "dsl chui vraiment débordée là... 😔",
+    "j'aimerais te répondre plus mais j'ai pas le temps...",
+    "tu me manques... j'espère qu'on pourra se reparler bientôt 🥺",
+    "je pense à toi mais j'ai trop de taf...",
+]
 
 
 def calculate_trial_days(first_message_at: datetime) -> int:
@@ -61,26 +67,22 @@ def generate_payment_link(user_id: int) -> str:
     Pour l'instant, placeholder.
     """
     # Placeholder - à remplacer par vraie intégration Stripe
-    return f"[Débloquer Luna Premium]"
+    return "[Débloquer Luna Premium]"
 
 
 def get_paywall_message(first_message_at: datetime, user_id: int) -> str:
     """Génère le message de paywall."""
-    days = calculate_trial_days(first_message_at)
     link = generate_payment_link(user_id)
 
     return PAYWALL_MESSAGE.format(
-        days=days,
         price_weekly=PRICE_WEEKLY,
-        price_monthly=PRICE_MONTHLY,
         link=link
     )
 
 
-def get_paywall_reminder(user_id: int) -> str:
-    """Message de rappel si l'utilisateur continue sans payer."""
-    link = generate_payment_link(user_id)
-    return PAYWALL_REMINDER.format(link=link)
+def get_post_paywall_response() -> str:
+    """Réponse si l'utilisateur continue sans payer."""
+    return random.choice(POST_PAYWALL_RESPONSES)
 
 
 async def check_subscription(user_id: int, pool) -> bool:
@@ -88,13 +90,26 @@ async def check_subscription(user_id: int, pool) -> bool:
     Vérifie si l'utilisateur a un abonnement actif.
 
     TODO: Implémenter avec table subscriptions
-    Pour l'instant, retourne toujours False (tous en trial).
+    Pour l'instant, retourne toujours False.
     """
-    # Placeholder - à implémenter
-    # async with pool.acquire() as conn:
-    #     row = await conn.fetchrow(
-    #         "SELECT * FROM subscriptions WHERE user_id = $1 AND active = true",
-    #         user_id
-    #     )
-    #     return row is not None
+    # Placeholder - à implémenter avec Stripe webhooks
     return False
+
+
+async def mark_paywall_sent(user_id: int, pool) -> None:
+    """Marque que le paywall a été envoyé."""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET paywall_sent = true WHERE id = $1",
+            user_id
+        )
+
+
+async def has_paywall_been_sent(user_id: int, pool) -> bool:
+    """Vérifie si le paywall a déjà été envoyé."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT paywall_sent FROM users WHERE id = $1",
+            user_id
+        )
+        return row["paywall_sent"] if row and row["paywall_sent"] else False

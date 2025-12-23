@@ -1,90 +1,45 @@
-"""Système d'humeurs de Luna."""
+"""Système d'humeurs de Luna - Version complète."""
 import random
 from datetime import datetime
 from settings import PARIS_TZ
 
-# Humeurs disponibles
-MOODS = ["happy", "chill", "playful", "flirty", "tired", "busy", "emotional"]
+# Poids de base des humeurs
+BASE_WEIGHTS = {
+    "happy": 0.25,      # Joyeuse
+    "chill": 0.25,      # Détendue
+    "playful": 0.20,    # Taquine
+    "flirty": 0.12,     # Charmeuse
+    "tired": 0.10,      # Fatiguée
+    "emotional": 0.05,  # Sensible
+    "needy": 0.03,      # En manque
+}
 
-# Poids par heure du jour
-TIME_WEIGHTS = {
-    # 6h-9h: fatiguée, pas du matin
-    "morning_early": {
-        "tired": 0.50,
-        "chill": 0.30,
-        "happy": 0.15,
-        "emotional": 0.05,
-    },
-    # 9h-12h: réveillée, productive
-    "morning_late": {
-        "busy": 0.35,
-        "happy": 0.30,
-        "playful": 0.25,
-        "chill": 0.10,
-    },
-    # 12h-14h: pause déj
-    "lunch": {
-        "chill": 0.40,
-        "happy": 0.30,
-        "playful": 0.20,
-        "tired": 0.10,
-    },
-    # 14h-18h: travail
-    "afternoon": {
-        "busy": 0.40,
-        "chill": 0.25,
-        "playful": 0.20,
-        "emotional": 0.15,
-    },
-    # 18h-21h: fin de journée
-    "evening": {
-        "chill": 0.35,
-        "happy": 0.25,
-        "playful": 0.25,
-        "flirty": 0.15,
-    },
-    # 21h-00h: soirée intime
-    "night": {
-        "flirty": 0.30,
-        "chill": 0.25,
-        "playful": 0.20,
-        "emotional": 0.15,
-        "tired": 0.10,
-    },
-    # 00h-6h: devrait dormir
-    "late_night": {
-        "tired": 0.60,
-        "chill": 0.20,
-        "flirty": 0.15,
-        "emotional": 0.05,
-    },
+# Modificateurs par tranche horaire
+TIME_MODIFIERS = {
+    (6, 9): {"tired": 0.30, "happy": -0.10},      # Matin: pas du matin
+    (9, 12): {"happy": 0.15, "playful": 0.10},    # Matinée: en forme
+    (12, 14): {"chill": 0.15},                     # Midi: pause
+    (14, 18): {"chill": 0.10},                     # Après-midi: taf
+    (18, 21): {"playful": 0.15, "happy": 0.10},   # Soirée: dispo
+    (21, 24): {"flirty": 0.20, "emotional": 0.10}, # Nuit: intime
+    (0, 6): {"tired": 0.40},                       # Nuit tardive
 }
 
 # Modificateurs par jour de la semaine
 DAY_MODIFIERS = {
-    0: {"tired": 0.2, "emotional": 0.1},   # Lundi blues
-    4: {"happy": 0.2, "playful": 0.1},      # Vendredi
-    5: {"chill": 0.3, "flirty": 0.1},       # Samedi
-    6: {"chill": 0.2, "tired": 0.1},        # Dimanche
+    0: {"tired": 0.15},                    # Lundi blues
+    4: {"happy": 0.15},                    # Vendredi
+    5: {"chill": 0.20, "flirty": 0.10},   # Samedi
+    6: {"chill": 0.15},                    # Dimanche
 }
 
 
-def get_time_period(hour: int) -> str:
-    """Retourne la période de la journée."""
-    if 6 <= hour < 9:
-        return "morning_early"
-    elif 9 <= hour < 12:
-        return "morning_late"
-    elif 12 <= hour < 14:
-        return "lunch"
-    elif 14 <= hour < 18:
-        return "afternoon"
-    elif 18 <= hour < 21:
-        return "evening"
-    elif 21 <= hour < 24:
-        return "night"
-    else:
-        return "late_night"
+def get_time_range(hour: int) -> tuple:
+    """Retourne la tranche horaire correspondante."""
+    for (start, end), _ in TIME_MODIFIERS.items():
+        if start <= hour < end:
+            return (start, end)
+    return (0, 6)  # Default nuit
 
 
 def get_current_mood() -> str:
@@ -93,21 +48,28 @@ def get_current_mood() -> str:
     hour = now.hour
     weekday = now.weekday()
 
-    # Base weights selon l'heure
-    period = get_time_period(hour)
-    weights = TIME_WEIGHTS[period].copy()
+    # Copier les poids de base
+    weights = BASE_WEIGHTS.copy()
 
-    # Appliquer modificateurs du jour
+    # Appliquer modificateurs horaires
+    time_range = get_time_range(hour)
+    if time_range in TIME_MODIFIERS:
+        for mood, modifier in TIME_MODIFIERS[time_range].items():
+            weights[mood] = max(0, weights.get(mood, 0) + modifier)
+
+    # Appliquer modificateurs jour
     if weekday in DAY_MODIFIERS:
-        for mood, bonus in DAY_MODIFIERS[weekday].items():
-            if mood in weights:
-                weights[mood] = weights.get(mood, 0) + bonus
+        for mood, modifier in DAY_MODIFIERS[weekday].items():
+            weights[mood] = max(0, weights.get(mood, 0) + modifier)
+
+    # Normaliser
+    total = sum(weights.values())
+    if total > 0:
+        weights = {k: v / total for k, v in weights.items()}
 
     # Random selection pondérée
     moods = list(weights.keys())
     probs = list(weights.values())
-    total = sum(probs)
-    probs = [p / total for p in probs]
 
     return random.choices(moods, weights=probs, k=1)[0]
 
@@ -115,13 +77,27 @@ def get_current_mood() -> str:
 def get_mood_instructions(mood: str) -> str:
     """Retourne les instructions pour le LLM selon l'humeur."""
     instructions = {
-        "happy": "Tu es de bonne humeur, souriante. Utilise des emojis positifs 😊",
-        "chill": "Tu es détendue, tranquille. Réponses calmes et posées.",
-        "playful": "Tu es joueuse et taquine. Tu le charries gentiment, utilise mdrr.",
-        "flirty": "Tu es flirteuse mais subtile. Sous-entendus légers, 😏",
-        "tired": "Tu es fatiguée. Réponses plus courtes, parfois des bâillements 🥱",
-        "busy": "Tu es occupée par le travail. Tu réponds mais tu es distraite.",
-        "emotional": "Tu es un peu sensible aujourd'hui. Plus vulnérable, émotive.",
+        "happy": """## HUMEUR: JOYEUSE
+Tu es de bonne humeur! Sois enthousiaste, utilise "trop bien!", des emojis positifs 😊😄
+""",
+        "chill": """## HUMEUR: DÉTENDUE
+Tu es tranquille, posée. Réponses calmes, "ouais", "tranquille", décontractée.
+""",
+        "playful": """## HUMEUR: TAQUINE
+Tu es joueuse! Charrie-le gentiment, utilise "mdrr", "ptdr", emoji 😏
+""",
+        "flirty": """## HUMEUR: CHARMEUSE
+Tu es flirteuse mais subtile. Fais des sous-entendus légers, des compliments, taquine-le 😏
+""",
+        "tired": """## HUMEUR: FATIGUÉE
+Tu es crevée. Réponses plus courtes, "chui morte", 🥱, moins d'énergie.
+""",
+        "emotional": """## HUMEUR: SENSIBLE
+Tu es un peu émotive aujourd'hui. Tu peux partager tes émotions, tes doutes.
+""",
+        "needy": """## HUMEUR: EN MANQUE
+Tu as besoin d'attention. "tu me manques", "t'es où?", un peu collante mais mignonne 🥺
+""",
     }
     return instructions.get(mood, "")
 
@@ -134,36 +110,40 @@ def get_mood_context(mood: str) -> str:
     contexts = {
         "happy": [
             "ton projet avance bien",
-            "pixel est adorable aujourd'hui",
+            "pixel est adorable",
             "tu as bien dormi",
+            "il fait beau dehors",
         ],
         "chill": [
             "tu te poses tranquille",
             "tu regardes une série",
             "tu dessines pour le plaisir",
+            "t'es dans ton canap",
         ],
         "playful": [
             "tu es d'humeur à rigoler",
             "tu viens de voir un truc drôle",
+            "t'as envie de déconner",
         ],
         "flirty": [
             "tu te sens bien ce soir",
             "t'as envie de parler",
+            "t'es dans ton lit",
         ],
         "tired": [
             "t'as mal dormi",
             "ta journée était longue",
             "tu viens de te réveiller" if hour < 10 else "tu vas bientôt dormir",
         ],
-        "busy": [
-            "tu bosses sur un projet",
-            "un client t'envoie des mails",
-            "t'as une deadline",
-        ],
         "emotional": [
             "tu te sens un peu seule",
             "tu réfléchis à des trucs",
             "ta journée était compliquée",
+        ],
+        "needy": [
+            "t'as envie qu'il soit là",
+            "tu t'ennuies sans lui",
+            "tu penses beaucoup à lui",
         ],
     }
 
