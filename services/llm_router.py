@@ -42,22 +42,22 @@ def get_llm_config(
 
     # Abonnés = toujours premium
     if subscription_status == "active":
-        logger.info(f"Router: Lumimaid (abonné actif)")
-        return ("openrouter", "neversleep/llama-3.1-lumimaid-70b")
+        logger.info(f"Router: MidnightRose (abonné actif)")
+        return ("openrouter", "sophosympatheia/midnight-rose-70b")
 
     # J5 soir + engagement élevé = aperçu premium
     if day_count == 5:
         if hour >= 20 and teasing_stage >= 5:
-            logger.info(f"Router: Lumimaid (J5 soir, teasing={teasing_stage})")
-            return ("openrouter", "neversleep/llama-3.1-lumimaid-70b")
+            logger.info(f"Router: MidnightRose (J5 soir, teasing={teasing_stage})")
+            return ("openrouter", "sophosympatheia/midnight-rose-70b")
         if teasing_stage >= 6:
-            logger.info(f"Router: Lumimaid (J5, high teasing={teasing_stage})")
-            return ("openrouter", "neversleep/llama-3.1-lumimaid-70b")
+            logger.info(f"Router: MidnightRose (J5, high teasing={teasing_stage})")
+            return ("openrouter", "sophosympatheia/midnight-rose-70b")
 
     # J6+ non abonné mais très engagé = aperçu limité
     if day_count >= 6 and teasing_stage >= 7:
-        logger.info(f"Router: Lumimaid (J{day_count}, very high teasing)")
-        return ("openrouter", "neversleep/llama-3.1-lumimaid-70b")
+        logger.info(f"Router: MidnightRose (J{day_count}, very high teasing)")
+        return ("openrouter", "sophosympatheia/midnight-rose-70b")
 
     # Default: Haiku
     logger.info(f"Router: Haiku (J{day_count}, teasing={teasing_stage})")
