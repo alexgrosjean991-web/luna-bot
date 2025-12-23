@@ -89,9 +89,9 @@ class PromptAssembler:
             logger.info(f"State module loaded: {state.value}")
 
         # 3. INNER WORLD - État interne de Luna (~100 tokens)
-        inner_state = inner_world.get_state(user_id)
+        inner_state = await inner_world.get_state(user_id)
         inner_world.update_from_db(user_id, {'affection_level': affection})
-        inner_world.process_user_message(user_id, user_message)
+        await inner_world.process_user_message(user_id, user_message)
         inner_context = inner_world.get_prompt_context(user_id)
         parts.append(inner_context)
 
