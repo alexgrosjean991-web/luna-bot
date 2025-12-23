@@ -132,7 +132,7 @@ class LLMService:
         payload = {
             "model": config.OPENROUTER_MODEL,
             "messages": api_messages,
-            "max_tokens": 600
+            "max_tokens": 150  # Force short responses
         }
 
         # === DEBUG LOGGING ===
