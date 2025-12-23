@@ -3,8 +3,8 @@ LLM Router - Sélectionne le modèle optimal selon le parcours utilisateur.
 
 Routes:
     - J1-J4: Haiku (construction engagement)
-    - J5 20h+ avec teasing >= 5: Euryale (aperçu premium)
-    - J6+ abonné: Euryale (premium complet)
+    - J5 20h+ avec teasing >= 5: Hermes (aperçu premium)
+    - J6+ abonné: Hermes (premium complet)
 """
 
 from datetime import datetime
@@ -42,22 +42,22 @@ def get_llm_config(
 
     # Abonnés = toujours premium
     if subscription_status == "active":
-        logger.info(f"Router: Euryale (abonné actif)")
-        return ("openrouter", "sao10k/l3.3-euryale-70b")
+        logger.info(f"Router: Hermes (abonné actif)")
+        return ("openrouter", "nousresearch/hermes-3-llama-3.1-70b")
 
     # J5 soir + engagement élevé = aperçu premium
     if day_count == 5:
         if hour >= 20 and teasing_stage >= 5:
-            logger.info(f"Router: Euryale (J5 soir, teasing={teasing_stage})")
-            return ("openrouter", "sao10k/l3.3-euryale-70b")
+            logger.info(f"Router: Hermes (J5 soir, teasing={teasing_stage})")
+            return ("openrouter", "nousresearch/hermes-3-llama-3.1-70b")
         if teasing_stage >= 6:
-            logger.info(f"Router: Euryale (J5, high teasing={teasing_stage})")
-            return ("openrouter", "sao10k/l3.3-euryale-70b")
+            logger.info(f"Router: Hermes (J5, high teasing={teasing_stage})")
+            return ("openrouter", "nousresearch/hermes-3-llama-3.1-70b")
 
     # J6+ non abonné mais très engagé = aperçu limité
     if day_count >= 6 and teasing_stage >= 7:
-        logger.info(f"Router: Euryale (J{day_count}, very high teasing)")
-        return ("openrouter", "sao10k/l3.3-euryale-70b")
+        logger.info(f"Router: Hermes (J{day_count}, very high teasing)")
+        return ("openrouter", "nousresearch/hermes-3-llama-3.1-70b")
 
     # Default: Haiku
     logger.info(f"Router: Haiku (J{day_count}, teasing={teasing_stage})")

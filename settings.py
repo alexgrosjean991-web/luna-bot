@@ -35,7 +35,7 @@ ANTHROPIC_API_VERSION = "2023-06-01"  # LOW FIX: API versioning
 
 # OpenRouter (modèle premium)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-PREMIUM_MODEL = "sao10k/l3.3-euryale-70b"
+PREMIUM_MODEL = "nousresearch/hermes-3-llama-3.1-70b"
 MAX_TOKENS_PREMIUM = 150  # Plus de tokens pour contenu premium
 
 # Conversion
