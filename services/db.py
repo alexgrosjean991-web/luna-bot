@@ -1,14 +1,11 @@
 """Gestion PostgreSQL."""
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import asyncpg
-from settings import DB_CONFIG, HISTORY_LIMIT
+from settings import DB_CONFIG, HISTORY_LIMIT, PARIS_TZ, DB_POOL_MIN, DB_POOL_MAX
 
 logger = logging.getLogger(__name__)
-
-# Timezone Paris (UTC+1/+2)
-PARIS_TZ = timezone(timedelta(hours=1))
 
 pool: asyncpg.Pool | None = None
 
@@ -17,7 +14,7 @@ async def init_db() -> None:
     """Initialise le pool de connexions et crée les tables."""
     global pool
 
-    pool = await asyncpg.create_pool(**DB_CONFIG, min_size=1, max_size=5)
+    pool = await asyncpg.create_pool(**DB_CONFIG, min_size=DB_POOL_MIN, max_size=DB_POOL_MAX)
 
     async with pool.acquire() as conn:
         # Table users avec mémoire
@@ -120,23 +117,15 @@ async def save_message(user_id: int, role: str, content: str) -> None:
 
 
 async def get_or_create_user(telegram_id: int) -> dict:
-    """Récupère ou crée un utilisateur."""
+    """Récupère ou crée un utilisateur (race-condition safe)."""
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT id, telegram_id, memory, total_messages FROM users WHERE telegram_id = $1",
-            telegram_id
-        )
-        if row:
-            return dict(row)
-
-        # Créer le user
-        row = await conn.fetchrow(
-            """
-            INSERT INTO users (telegram_id) VALUES ($1)
+        # INSERT ON CONFLICT évite la race condition
+        row = await conn.fetchrow("""
+            INSERT INTO users (telegram_id)
+            VALUES ($1)
+            ON CONFLICT (telegram_id) DO UPDATE SET telegram_id = $1
             RETURNING id, telegram_id, memory, total_messages
-            """,
-            telegram_id
-        )
+        """, telegram_id)
         return dict(row)
 
 

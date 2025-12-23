@@ -1,8 +1,12 @@
 """Configuration centralisée."""
 import os
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Timezone Paris (gère automatiquement heure d'été/hiver)
+PARIS_TZ = ZoneInfo("Europe/Paris")
 
 # Telegram
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -23,8 +27,11 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 if not ANTHROPIC_API_KEY:
     raise ValueError("ANTHROPIC_API_KEY manquant dans .env")
 
-# Constantes
+# Constantes LLM
 LLM_MODEL = "claude-3-5-haiku-20241022"
-MAX_TOKENS = 60           # Réduit pour forcer réponses courtes
-TEMPERATURE = 0.9         # Plus de personnalité
+MAX_TOKENS = 40           # Réduit pour forcer réponses courtes
 HISTORY_LIMIT = 20
+
+# DB Pool
+DB_POOL_MIN = 2
+DB_POOL_MAX = 20

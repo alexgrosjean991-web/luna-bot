@@ -1,12 +1,10 @@
 """Messages proactifs automatiques."""
 import random
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
+from settings import PARIS_TZ
 
 logger = logging.getLogger(__name__)
-
-# Timezone Paris (UTC+1)
-PARIS_TZ = timezone(timedelta(hours=1))
 
 # Messages templates par type
 MESSAGES = {

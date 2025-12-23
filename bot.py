@@ -1,6 +1,8 @@
 """Luna Bot - Entry Point (Modular)."""
 import json
 import logging
+import time
+from collections import defaultdict
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -28,6 +30,10 @@ logger = logging.getLogger(__name__)
 # Extraction mémoire tous les X messages
 MEMORY_EXTRACTION_INTERVAL = 5
 
+# Rate limiting: 1 message par seconde max
+RATE_LIMIT_SECONDS = 1.0
+user_last_message: dict[int, float] = defaultdict(float)
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handler /start."""
@@ -42,6 +48,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if not user_text:
         return
+
+    # Rate limiting
+    now = time.time()
+    if now - user_last_message[telegram_id] < RATE_LIMIT_SECONDS:
+        logger.warning(f"Rate limit: {tg_user.first_name} spamme")
+        return
+    user_last_message[telegram_id] = now
 
     logger.info(f"[{tg_user.first_name}] {user_text}")
 
