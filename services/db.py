@@ -125,6 +125,32 @@ async def init_db() -> None:
             last_message_at TIMESTAMP WITH TIME ZONE DEFAULT NULL
         """)
 
+        # V5: Colonnes pour psychology modules
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            inside_jokes JSONB DEFAULT '[]'
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            pending_events JSONB DEFAULT '[]'
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            attachment_score FLOAT DEFAULT 0
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            session_count INTEGER DEFAULT 0
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            user_initiated_count INTEGER DEFAULT 0
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            vulnerabilities_shared INTEGER DEFAULT 0
+        """)
+
     logger.info("DB connectée")
 
 
@@ -361,3 +387,121 @@ async def set_last_message_time(user_id: int) -> None:
             "UPDATE users SET last_message_at = NOW() WHERE id = $1",
             user_id
         )
+
+
+# ============== V5: Psychology data functions ==============
+
+async def get_inside_jokes(user_id: int) -> list:
+    """Récupère les inside jokes d'un utilisateur."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT inside_jokes FROM users WHERE id = $1", user_id
+        )
+        if row and row["inside_jokes"]:
+            jokes = row["inside_jokes"]
+            return json.loads(jokes) if isinstance(jokes, str) else jokes
+        return []
+
+
+async def update_inside_jokes(user_id: int, jokes: list) -> None:
+    """Met à jour les inside jokes."""
+    async with get_pool().acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET inside_jokes = $1 WHERE id = $2",
+            json.dumps(jokes, ensure_ascii=False, default=str),
+            user_id
+        )
+
+
+async def get_pending_events(user_id: int) -> list:
+    """Récupère les événements en attente."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT pending_events FROM users WHERE id = $1", user_id
+        )
+        if row and row["pending_events"]:
+            events = row["pending_events"]
+            return json.loads(events) if isinstance(events, str) else events
+        return []
+
+
+async def update_pending_events(user_id: int, events: list) -> None:
+    """Met à jour les événements en attente."""
+    async with get_pool().acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET pending_events = $1 WHERE id = $2",
+            json.dumps(events, ensure_ascii=False, default=str),
+            user_id
+        )
+
+
+async def update_attachment_score(user_id: int, score: float) -> None:
+    """Met à jour le score d'attachement."""
+    async with get_pool().acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET attachment_score = $1 WHERE id = $2",
+            score, user_id
+        )
+
+
+async def increment_session_count(user_id: int) -> int:
+    """Incrémente le compteur de sessions."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE users
+            SET session_count = session_count + 1
+            WHERE id = $1
+            RETURNING session_count
+            """,
+            user_id
+        )
+        return row["session_count"] if row else 0
+
+
+async def increment_user_initiated(user_id: int) -> None:
+    """Incrémente le compteur de conversations initiées par user."""
+    async with get_pool().acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET user_initiated_count = user_initiated_count + 1 WHERE id = $1",
+            user_id
+        )
+
+
+async def increment_vulnerabilities(user_id: int) -> None:
+    """Incrémente le compteur de vulnérabilités partagées."""
+    async with get_pool().acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET vulnerabilities_shared = vulnerabilities_shared + 1 WHERE id = $1",
+            user_id
+        )
+
+
+async def get_psychology_data(user_id: int) -> dict:
+    """Récupère toutes les données psychology pour un user."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT
+                inside_jokes, pending_events, attachment_score,
+                session_count, user_initiated_count, vulnerabilities_shared,
+                total_messages, first_message_at, last_message_at
+            FROM users WHERE id = $1
+        """, user_id)
+
+        if not row:
+            return {}
+
+        inside_jokes = row["inside_jokes"]
+        pending_events = row["pending_events"]
+
+        return {
+            "inside_jokes": json.loads(inside_jokes) if isinstance(inside_jokes, str) else (inside_jokes or []),
+            "pending_events": json.loads(pending_events) if isinstance(pending_events, str) else (pending_events or []),
+            "attachment_score": row["attachment_score"] or 0,
+            "session_count": row["session_count"] or 0,
+            "user_initiated_count": row["user_initiated_count"] or 0,
+            "vulnerabilities_shared": row["vulnerabilities_shared"] or 0,
+            "total_messages": row["total_messages"] or 0,
+            "first_message_at": row["first_message_at"],
+            "last_message_at": row["last_message_at"],
+        }

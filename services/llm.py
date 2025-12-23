@@ -41,7 +41,8 @@ async def generate_response(
     phase: str = "discovery",
     day_count: int = 1,
     mood: str = "chill",
-    emotional_state: str | None = None
+    emotional_state: str | None = None,
+    extra_instructions: str | None = None
 ) -> str:
     """
     Génère une réponse Luna avec contexte complet.
@@ -54,6 +55,7 @@ async def generate_response(
         day_count: Numéro du jour
         mood: Humeur actuelle (happy, chill, playful, flirty, tired, busy, emotional)
         emotional_state: État émotionnel si pic en cours (opener, follow_up, resolution)
+        extra_instructions: Instructions V5 psychology (affection, inside jokes, etc.)
 
     Returns:
         Réponse de Luna
@@ -95,6 +97,10 @@ async def generate_response(
         emotional_instruction = get_emotional_instruction(day_count, emotional_state)
         if emotional_instruction:
             system_parts.append(emotional_instruction)
+
+    # 8. V5: Ajouter extra instructions (psychology modules)
+    if extra_instructions:
+        system_parts.append(f"\n## INSTRUCTIONS SUPPLÉMENTAIRES:\n{extra_instructions}")
 
     system_prompt = "\n".join(system_parts)
 

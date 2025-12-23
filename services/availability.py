@@ -89,7 +89,8 @@ def calculate_typing_duration(text: str) -> float:
 async def send_with_natural_delay(
     update: Update,
     text: str,
-    mood: str = "chill"
+    mood: str = "chill",
+    delay_modifier: int = 0
 ) -> None:
     """
     Envoie un message avec délai naturel et typing indicator.
@@ -98,6 +99,7 @@ async def send_with_natural_delay(
         update: Update Telegram
         text: Texte à envoyer
         mood: Humeur actuelle (affecte le délai)
+        delay_modifier: V5 - Modificateur de délai en secondes (intermittent)
     """
     chat_id = update.effective_chat.id
     bot = update.get_bot()
@@ -105,6 +107,9 @@ async def send_with_natural_delay(
     # 1. Calculer les délais
     think_delay = calculate_delay(mood)
     typing_duration = calculate_typing_duration(text)
+
+    # V5: Appliquer le modificateur intermittent
+    think_delay = max(0.5, think_delay + delay_modifier)
 
     logger.info(f"Délai: {think_delay:.1f}s réflexion + {typing_duration:.1f}s frappe")
 

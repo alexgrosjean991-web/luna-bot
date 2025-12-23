@@ -72,8 +72,19 @@ from services.db import (
     update_last_active, get_users_for_proactive, count_proactive_today, log_proactive,
     get_user_data, update_teasing_stage,
     # CRITICAL FIX: États persistants
-    get_emotional_state, set_emotional_state, set_last_message_time
+    get_emotional_state, set_emotional_state, set_last_message_time,
+    # V5: Psychology data
+    get_inside_jokes, update_inside_jokes, get_pending_events, update_pending_events,
+    update_attachment_score, increment_session_count, increment_vulnerabilities,
+    get_psychology_data, get_last_message_time
 )
+
+# V5: Psychology modules
+from services.psychology.variable_rewards import VariableRewardsEngine, RewardContext
+from services.psychology.inside_jokes import InsideJokesEngine, InsideJoke
+from services.psychology.intermittent import IntermittentEngine
+from services.psychology.memory_callbacks import MemoryCallbacksEngine, PendingEvent
+from services.psychology.attachment import AttachmentTracker
 from services.llm import generate_response
 from services.memory import extract_memory
 from services.mood import get_current_mood, get_mood_instructions, get_mood_context
@@ -149,6 +160,13 @@ class RateLimiter:
 
 # 20 messages par minute max
 rate_limiter = RateLimiter(window_seconds=60.0, max_requests=20)
+
+# V5: Psychology engines
+variable_rewards = VariableRewardsEngine()
+inside_jokes = InsideJokesEngine()
+intermittent = IntermittentEngine()
+memory_callbacks = MemoryCallbacksEngine()
+attachment_tracker = AttachmentTracker()
 
 # ============== CRITICAL FIX: Sanitization ==============
 MAX_MESSAGE_LENGTH = 2000
@@ -230,7 +248,7 @@ def write_health_file():
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handler principal avec tous les systèmes intégrés."""
+    """Handler principal avec tous les systèmes intégrés + V5 psychology."""
     tg_user = update.effective_user
     telegram_id = tg_user.id
 
@@ -245,7 +263,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.warning(f"Rate limit: {tg_user.first_name} (wait {wait_time:.0f}s)")
         return
 
-    logger.info(f"[{tg_user.first_name}] {user_text[:100]}...")  # Tronquer dans les logs
+    logger.info(f"[{tg_user.first_name}] {user_text[:100]}...")
 
     # Track metrics
     metrics.record_message()
@@ -255,8 +273,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = user["id"]
 
     # 2. Update last_active + last_message_at (persistant)
+    last_msg_time = await get_last_message_time(user_id)
+    hours_since_last = 0
+    if last_msg_time:
+        hours_since_last = (datetime.now(last_msg_time.tzinfo or None) - last_msg_time).total_seconds() / 3600
+
     await update_last_active(user_id)
     await set_last_message_time(user_id)
+
+    # V5: Track sessions (nouvelle session si >4h d'inactivité)
+    is_new_session = hours_since_last > 4
+    if is_new_session:
+        await increment_session_count(user_id)
 
     # 3. Sauvegarder message user
     await save_message(user_id, "user", user_text)
@@ -276,7 +304,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         paywall_sent = await has_paywall_been_sent(user_id, get_pool())
 
         if not paywall_sent:
-            # Premier message après trial: envoyer paywall
             paywall_msg = get_paywall_message(first_message_at, user_id)
             await update.message.reply_text(paywall_msg)
             await save_message(user_id, "assistant", paywall_msg)
@@ -284,7 +311,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.info(f"Paywall envoyé à user {user_id}")
             return
         else:
-            # Paywall déjà envoyé: réponse limitée
             response = get_post_paywall_response()
             await update.message.reply_text(response)
             await save_message(user_id, "assistant", response)
@@ -297,12 +323,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # 9. Déterminer mood
     mood = get_current_mood()
 
-    # 10. CRITICAL FIX: Get emotional state from DB (persistant)
+    # 10. Get emotional state from DB (persistant)
     emotional_state = await get_emotional_state(user_id)
 
-    logger.info(f"User {user_id}: Phase={phase}, Day={day_count}, Mood={mood}, EmotionalState={emotional_state}")
+    # V5: Get psychology data
+    psych_data = await get_psychology_data(user_id)
+    existing_jokes = [InsideJoke.from_dict(j) for j in psych_data.get("inside_jokes", [])]
+    pending_events = [PendingEvent.from_dict(e) for e in psych_data.get("pending_events", [])]
 
-    # 11. Progress emotional state if user responded (persistant)
+    logger.info(f"User {user_id}: Day={day_count}, Mood={mood}, Jokes={len(existing_jokes)}")
+
+    # 11. Progress emotional state if user responded
     if emotional_state == "opener":
         await set_emotional_state(user_id, "follow_up")
         emotional_state = "follow_up"
@@ -311,7 +342,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         emotional_state = "resolution"
     elif emotional_state == "resolution":
         await set_emotional_state(user_id, None)
-        emotional_state = None  # Don't pass to LLM, peak is over
+        emotional_state = None
+
+    # V5: Intermittent reinforcement - get current state
+    intermittent_state = intermittent.get_state(user_id, day_count, hours_since_last)
+    affection_instruction = intermittent.get_affection_instruction(intermittent_state)
+
+    # V5: Check for inside joke opportunities
+    joke_opportunity = None
+    if inside_jokes.should_create(day_count, len(existing_jokes)):
+        joke_opportunity = inside_jokes.detect_opportunity(user_text, existing_jokes)
+        if joke_opportunity:
+            new_joke = inside_jokes.create_joke(joke_opportunity)
+            existing_jokes.append(new_joke)
+            await update_inside_jokes(user_id, [j.to_dict() for j in existing_jokes])
+            logger.info(f"Created inside joke: {new_joke.value}")
+
+    # V5: Extract pending events from user message
+    new_events = memory_callbacks.extract_pending_events(user_text)
+    if new_events:
+        pending_events.extend(new_events)
+        await update_pending_events(user_id, [e.to_dict() for e in pending_events])
+
+    # V5: Check for vulnerability indicators
+    vulnerability_words = ["j'ai peur", "je me sens seul", "j'avoue", "entre nous", "j'ai jamais dit"]
+    if any(vw in user_text.lower() for vw in vulnerability_words):
+        await increment_vulnerabilities(user_id)
 
     # 12. Check teasing opportunity (J2-5)
     teasing_msg = None
@@ -320,10 +376,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if teasing_msg:
             await update_teasing_stage(user_id, user_data.get("teasing_stage", 0) + 1)
 
+    # V5: Build extra instructions for LLM
+    extra_instructions = []
+    if affection_instruction:
+        extra_instructions.append(affection_instruction)
+
+    # V5: Memory callback instruction
+    memory_instruction = memory_callbacks.get_memory_instruction(memory)
+    if memory_instruction:
+        extra_instructions.append(memory_instruction)
+
+    # V5: Inside joke callback
+    if existing_jokes and not joke_opportunity:
+        for joke in existing_jokes:
+            callback = inside_jokes.get_callback(joke, day_count)
+            if callback:
+                extra_instructions.append(f"\n## INSIDE JOKE\nMentionne naturellement: {callback}")
+                joke.times_referenced += 1
+                joke.last_referenced = datetime.now()
+                await update_inside_jokes(user_id, [j.to_dict() for j in existing_jokes])
+                break
+
     # 13. Générer réponse
     try:
         response = await generate_response(
-            user_text, history, memory, phase, day_count, mood, emotional_state
+            user_text, history, memory, phase, day_count, mood, emotional_state,
+            extra_instructions="\n".join(extra_instructions) if extra_instructions else None
         )
         metrics.record_llm_call(success=True)
     except Exception as e:
@@ -331,6 +409,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         metrics.record_error(str(e))
         logger.error(f"LLM generation failed: {e}")
         response = "dsl j'ai bugé 😅"
+
+    # V5: Modify response based on intermittent affection
+    response = intermittent.modify_response(response, intermittent_state)
+
+    # V5: Check variable rewards
+    reward_context = RewardContext(
+        user_id=user_id,
+        phase=day_count,
+        day_count=day_count,
+        messages_this_session=msg_count % 50,  # Approximation
+        user_message=user_text,
+        memory=memory,
+        conversation_sentiment="positive" if any(e in user_text.lower() for e in ["merci", "cool", "super", "j'aime"]) else "neutral"
+    )
+    reward = variable_rewards.check_reward(reward_context)
+    if reward:
+        reward_type, reward_msg = reward
+        response = response + "\n\n" + reward_msg
+        logger.info(f"Variable reward added: {reward_type.value}")
+
+    # V5: Add inside joke creation message if opportunity
+    if joke_opportunity:
+        response = response + "\n\n" + joke_opportunity.creation_message
 
     # 14. Ajouter teasing si opportun
     if teasing_msg:
@@ -341,7 +442,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     logger.info(f"[Luna] {response}")
 
-    # 16. MEDIUM FIX: Extraction mémoire périodique avec error handling
+    # 16. Extraction mémoire périodique
     if msg_count % MEMORY_EXTRACTION_INTERVAL == 0:
         try:
             logger.info(f"Extraction mémoire pour user {user_id} (msg #{msg_count})")
@@ -349,11 +450,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             new_memory = await extract_memory(updated_history, memory)
             await update_user_memory(user_id, new_memory)
         except Exception as e:
-            # Ne pas bloquer la conversation si l'extraction échoue
             logger.error(f"Memory extraction failed for user {user_id}: {e}")
 
-    # 17. Envoyer avec délai naturel
-    await send_with_natural_delay(update, response, mood)
+    # V5: Update attachment score periodically
+    if msg_count % 10 == 0:
+        try:
+            # Récupérer les messages pour analyse
+            all_history = await get_history(user_id, limit=50)
+            user_messages_content = [m["content"] for m in all_history if m["role"] == "user"]
+
+            score_data = {
+                "user_messages": len([m for m in all_history if m["role"] == "user"]),
+                "luna_messages": len([m for m in all_history if m["role"] == "assistant"]),
+                "session_count": psych_data.get("session_count", 1),
+                "user_initiated_count": psych_data.get("user_initiated_count", 0),
+                "inside_jokes_count": len(existing_jokes),
+                "vulnerabilities_shared": psych_data.get("vulnerabilities_shared", 0),
+                "total_messages": msg_count,
+                "user_messages_content": user_messages_content,
+                "response_times": [],  # TODO: track response times
+            }
+            attachment_metrics = attachment_tracker.calculate_score(score_data)
+            await update_attachment_score(user_id, attachment_metrics.score)
+            logger.info(f"Attachment score updated: {attachment_metrics.score:.1f}")
+        except Exception as e:
+            logger.error(f"Attachment score update failed: {e}")
+
+    # 17. Envoyer avec délai naturel (+ intermittent delay modifier)
+    delay_modifier = intermittent.get_delay_modifier(intermittent_state)
+    await send_with_natural_delay(update, response, mood, delay_modifier)
 
 
 async def send_proactive_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
