@@ -29,7 +29,7 @@ if not ANTHROPIC_API_KEY:
 
 # Constantes LLM
 LLM_MODEL = "claude-3-5-haiku-20241022"
-MAX_TOKENS = 40           # Réduit pour forcer réponses courtes
+MAX_TOKENS = 80           # Assez pour une réponse complète
 HISTORY_LIMIT = 20
 
 # DB Pool
