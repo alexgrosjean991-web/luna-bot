@@ -75,6 +75,9 @@ class HumanBehavior:
     Simule des comportements humains réalistes.
     """
 
+    # TEST MODE: Set to True for instant responses (debugging)
+    TEST_MODE = True  # TODO: Set to False in production
+
     def __init__(self):
         self._last_behaviors: Dict[int, Tuple[datetime, BehaviorType]] = {}
         self._pending_replies: Dict[int, datetime] = {}  # user_id -> when to reply
@@ -104,6 +107,16 @@ class HumanBehavior:
         """
         Décide du comportement de Luna pour ce message.
         """
+        # TEST MODE: Always instant response for debugging
+        if self.TEST_MODE:
+            return BehaviorResult(
+                behavior=BehaviorType.INSTANT,
+                initial_delay=random.uniform(0.5, 1.5),
+                show_typing_then_stop=False,
+                excuse_message=None,
+                life_event=None
+            )
+
         period = self.get_time_period(hour)
 
         # === INSTANT RESPONSES ===
