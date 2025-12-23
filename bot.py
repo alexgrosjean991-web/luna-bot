@@ -2,11 +2,70 @@
 import json
 import logging
 import time
+import signal
+import sys
 from collections import defaultdict
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 from settings import TELEGRAM_BOT_TOKEN
+
+
+# ============== MEDIUM FIX: Structured JSON logging ==============
+class JSONFormatter(logging.Formatter):
+    """JSON formatter for structured logging."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_data = {
+            "timestamp": self.formatTime(record),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            log_data["exception"] = self.formatException(record.exc_info)
+        if hasattr(record, "user_id"):
+            log_data["user_id"] = record.user_id
+        return json.dumps(log_data, ensure_ascii=False)
+
+
+# ============== MEDIUM FIX: Basic metrics tracking ==============
+class Metrics:
+    """Simple internal metrics tracker."""
+
+    def __init__(self):
+        self.messages_processed = 0
+        self.errors_count = 0
+        self.llm_calls = 0
+        self.llm_errors = 0
+        self.last_error: str | None = None
+        self.last_error_time: float | None = None
+
+    def record_message(self):
+        self.messages_processed += 1
+
+    def record_error(self, error: str):
+        self.errors_count += 1
+        self.last_error = error
+        self.last_error_time = time.time()
+
+    def record_llm_call(self, success: bool = True):
+        self.llm_calls += 1
+        if not success:
+            self.llm_errors += 1
+
+    def get_stats(self) -> dict:
+        return {
+            "messages_processed": self.messages_processed,
+            "errors_count": self.errors_count,
+            "llm_calls": self.llm_calls,
+            "llm_errors": self.llm_errors,
+            "llm_success_rate": f"{(1 - self.llm_errors / max(1, self.llm_calls)) * 100:.1f}%",
+            "last_error": self.last_error,
+        }
+
+
+metrics = Metrics()
 from services.db import (
     init_db, close_db, save_message, get_history, get_pool,
     get_or_create_user, get_user_memory, update_user_memory, increment_message_count,
@@ -35,11 +94,19 @@ from services.emotional_peaks import (
 )
 from services.story_arcs import get_story_context
 
-# Logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+# ============== MEDIUM FIX: Configurable logging ==============
+import os
+LOG_FORMAT = os.getenv("LOG_FORMAT", "text")  # "json" or "text"
+
+if LOG_FORMAT == "json":
+    handler = logging.StreamHandler()
+    handler.setFormatter(JSONFormatter())
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
+else:
+    logging.basicConfig(
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        level=logging.INFO
+    )
 logger = logging.getLogger(__name__)
 
 # Extraction mémoire tous les X messages
@@ -132,13 +199,24 @@ async def health_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     hours, remainder = divmod(int(uptime.total_seconds()), 3600)
     minutes, seconds = divmod(remainder, 60)
 
+    # Get metrics
+    stats = metrics.get_stats()
+
     health_msg = f"""🏥 Health Check
 
 **Bot**: ✅ Running
 **DB**: {db_status}
 **Uptime**: {hours}h {minutes}m {seconds}s
-**Rate limiter**: {len(rate_limiter._requests)} users tracked
+
+📊 **Metrics**:
+• Messages: {stats['messages_processed']}
+• LLM calls: {stats['llm_calls']} (success: {stats['llm_success_rate']})
+• Errors: {stats['errors_count']}
+• Rate limiter: {len(rate_limiter._requests)} users
 """
+    if stats['last_error']:
+        health_msg += f"\n⚠️ Last error: {stats['last_error'][:50]}"
+
     await update.message.reply_text(health_msg, parse_mode="Markdown")
 
 
@@ -168,6 +246,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     logger.info(f"[{tg_user.first_name}] {user_text[:100]}...")  # Tronquer dans les logs
+
+    # Track metrics
+    metrics.record_message()
 
     # 1. Get/create user
     user = await get_or_create_user(telegram_id)
@@ -240,9 +321,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update_teasing_stage(user_id, user_data.get("teasing_stage", 0) + 1)
 
     # 13. Générer réponse
-    response = await generate_response(
-        user_text, history, memory, phase, day_count, mood, emotional_state
-    )
+    try:
+        response = await generate_response(
+            user_text, history, memory, phase, day_count, mood, emotional_state
+        )
+        metrics.record_llm_call(success=True)
+    except Exception as e:
+        metrics.record_llm_call(success=False)
+        metrics.record_error(str(e))
+        logger.error(f"LLM generation failed: {e}")
+        response = "dsl j'ai bugé 😅"
 
     # 14. Ajouter teasing si opportun
     if teasing_msg:
@@ -253,12 +341,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     logger.info(f"[Luna] {response}")
 
-    # 16. Extraction mémoire périodique
+    # 16. MEDIUM FIX: Extraction mémoire périodique avec error handling
     if msg_count % MEMORY_EXTRACTION_INTERVAL == 0:
-        logger.info(f"Extraction mémoire pour user {user_id} (msg #{msg_count})")
-        updated_history = await get_history(user_id, limit=10)
-        new_memory = await extract_memory(updated_history, memory)
-        await update_user_memory(user_id, new_memory)
+        try:
+            logger.info(f"Extraction mémoire pour user {user_id} (msg #{msg_count})")
+            updated_history = await get_history(user_id, limit=10)
+            new_memory = await extract_memory(updated_history, memory)
+            await update_user_memory(user_id, new_memory)
+        except Exception as e:
+            # Ne pas bloquer la conversation si l'extraction échoue
+            logger.error(f"Memory extraction failed for user {user_id}: {e}")
 
     # 17. Envoyer avec délai naturel
     await send_with_natural_delay(update, response, mood)
@@ -347,6 +439,7 @@ async def send_proactive_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.info(f"Proactive '{msg_type}' ({phase}) sent to user {user_id}")
 
         except Exception as e:
+            metrics.record_error(f"proactive: {e}")
             logger.error(f"Error sending proactive to user {user['id']}: {e}")
 
 
@@ -358,11 +451,34 @@ async def post_init(application: Application) -> None:
 
 async def post_shutdown(application: Application) -> None:
     """Appelé avant shutdown."""
+    logger.info("Graceful shutdown initiated...")
     await close_db()
+    logger.info("Shutdown complete.")
+
+
+# ============== MEDIUM FIX: Graceful shutdown handling ==============
+_shutdown_triggered = False
+
+
+def handle_shutdown_signal(signum, frame):
+    """Handle shutdown signals gracefully."""
+    global _shutdown_triggered
+    if _shutdown_triggered:
+        logger.warning("Force shutdown requested")
+        sys.exit(1)
+    _shutdown_triggered = True
+    sig_name = signal.Signals(signum).name
+    logger.info(f"Received {sig_name}, initiating graceful shutdown...")
+    # The Application handles the actual shutdown via its own signal handling
+    # This just logs and prevents double-shutdown
 
 
 def main() -> None:
     """Lance le bot."""
+    # Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGTERM, handle_shutdown_signal)
+    signal.signal(signal.SIGINT, handle_shutdown_signal)
+
     logger.info("Démarrage Luna Bot...")
 
     app = (
