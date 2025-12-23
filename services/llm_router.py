@@ -3,8 +3,8 @@ LLM Router - Sélectionne le modèle optimal selon le parcours utilisateur.
 
 Routes:
     - J1-J4: Haiku (construction engagement)
-    - J5 20h+ avec teasing >= 5: Hermes (aperçu premium)
-    - J6+ abonné: Hermes (premium complet)
+    - J5 20h+ avec teasing >= 5: Lumimaid (aperçu premium)
+    - J6+ abonné: Lumimaid (premium complet)
 """
 
 from datetime import datetime
@@ -42,22 +42,22 @@ def get_llm_config(
 
     # Abonnés = toujours premium
     if subscription_status == "active":
-        logger.info(f"Router: Hermes (abonné actif)")
-        return ("openrouter", "nousresearch/hermes-3-llama-3.1-70b")
+        logger.info(f"Router: Lumimaid (abonné actif)")
+        return ("openrouter", "neversleep/llama-3.1-lumimaid-70b")
 
     # J5 soir + engagement élevé = aperçu premium
     if day_count == 5:
         if hour >= 20 and teasing_stage >= 5:
-            logger.info(f"Router: Hermes (J5 soir, teasing={teasing_stage})")
-            return ("openrouter", "nousresearch/hermes-3-llama-3.1-70b")
+            logger.info(f"Router: Lumimaid (J5 soir, teasing={teasing_stage})")
+            return ("openrouter", "neversleep/llama-3.1-lumimaid-70b")
         if teasing_stage >= 6:
-            logger.info(f"Router: Hermes (J5, high teasing={teasing_stage})")
-            return ("openrouter", "nousresearch/hermes-3-llama-3.1-70b")
+            logger.info(f"Router: Lumimaid (J5, high teasing={teasing_stage})")
+            return ("openrouter", "neversleep/llama-3.1-lumimaid-70b")
 
     # J6+ non abonné mais très engagé = aperçu limité
     if day_count >= 6 and teasing_stage >= 7:
-        logger.info(f"Router: Hermes (J{day_count}, very high teasing)")
-        return ("openrouter", "nousresearch/hermes-3-llama-3.1-70b")
+        logger.info(f"Router: Lumimaid (J{day_count}, very high teasing)")
+        return ("openrouter", "neversleep/llama-3.1-lumimaid-70b")
 
     # Default: Haiku
     logger.info(f"Router: Haiku (J{day_count}, teasing={teasing_stage})")
