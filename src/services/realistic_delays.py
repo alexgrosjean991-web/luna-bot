@@ -92,7 +92,8 @@ class RealisticDelayService:
         hour: int,
         mood: str,
         is_converted: bool,
-        is_french: bool
+        is_french: bool,
+        is_nsfw: bool = False  # NEW: Mode sexting = réponses rapides
     ) -> DelayResult:
         """
         Calcule le délai réaliste pour une réponse.
@@ -103,11 +104,12 @@ class RealisticDelayService:
         - Longueur du message user
         - Affection
         - Historique récent (éviter patterns répétitifs)
+        - Mode NSFW/sexting (réponses plus rapides)
         """
 
         # Determine base pattern
         pattern = self._determine_pattern(
-            user_id, user_message, affection, hour, mood, is_converted
+            user_id, user_message, affection, hour, mood, is_converted, is_nsfw
         )
 
         # Calculate delays based on pattern
@@ -125,9 +127,9 @@ class RealisticDelayService:
             response, affection, mood, typing_pattern
         )
 
-        # Add excuse for slow responses?
+        # Add excuse for slow responses? (NEVER during NSFW/sexting)
         add_excuse, excuse_text = self._determine_excuse(
-            pattern, is_french
+            pattern, is_french, is_nsfw
         )
 
         # Track this response
@@ -152,11 +154,24 @@ class RealisticDelayService:
         affection: float,
         hour: int,
         mood: str,
-        is_converted: bool
+        is_converted: bool,
+        is_nsfw: bool = False
     ) -> ResponsePattern:
         """Détermine le pattern de réponse"""
 
-        # Éviter trop de réponses rapides consécutives
+        # === MODE SEXTING/HOT = RÉPONSES RAPIDES ===
+        # Quand c'est chaud, elle répond vite - elle est excitée!
+        if is_nsfw and affection >= 50:
+            logger.debug("🔥 NSFW mode: fast responses enabled")
+            r = random.random()
+            if r < 0.50:  # 50% instant
+                return ResponsePattern.INSTANT
+            elif r < 0.85:  # 35% quick
+                return ResponsePattern.QUICK
+            else:  # 15% normal (pas trop prévisible)
+                return ResponsePattern.NORMAL
+
+        # Éviter trop de réponses rapides consécutives (sauf NSFW)
         consecutive = self._consecutive_quick.get(user_id, 0)
         if consecutive >= 3:
             # Force un délai plus long
@@ -369,9 +384,15 @@ class RealisticDelayService:
     def _determine_excuse(
         self,
         pattern: ResponsePattern,
-        is_french: bool
+        is_french: bool,
+        is_nsfw: bool = False
     ) -> Tuple[bool, Optional[str]]:
         """Détermine si on ajoute une excuse pour le délai"""
+
+        # === JAMAIS D'EXCUSE PENDANT LE SEXTING ===
+        # "j'étais sur Netflix" pendant un moment hot = immersion cassée
+        if is_nsfw:
+            return False, None
 
         if pattern in [ResponsePattern.VERY_SLOW, ResponsePattern.DELAYED]:
             if random.random() < 0.7:  # 70% chance

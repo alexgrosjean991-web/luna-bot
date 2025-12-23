@@ -780,7 +780,8 @@ SI IL INSISTE: "t'es vraiment bizarre", "pk tu demandes ça", "j'aime pas ces qu
             hour=hour,
             mood=mood,
             is_converted=is_converted,
-            is_french=is_french
+            is_french=is_french,
+            is_nsfw=use_nsfw_model  # Fast responses + no excuses during sexting
         )
 
         logger.info(f"Delay: {delay_result.initial_delay + delay_result.typing_duration:.1f}s, pattern: {delay_result.pattern.name}, typing: {delay_result.typing_pattern.name}")
