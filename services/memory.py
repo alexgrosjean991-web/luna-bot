@@ -1,8 +1,9 @@
 """Extraction et injection de mémoire."""
 import json
 import logging
+import random
 import httpx
-from settings import ANTHROPIC_API_KEY
+from settings import ANTHROPIC_API_KEY, ANTHROPIC_API_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ async def extract_memory(
 
     headers = {
         "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
+        "anthropic-version": ANTHROPIC_API_VERSION,
         "content-type": "application/json"
     }
 
@@ -144,8 +145,6 @@ def format_memory_for_prompt(memory: dict) -> str:
 
 def get_memory_recall_instruction(memory: dict) -> str:
     """Génère une instruction pour rappeler activement un élément de mémoire."""
-    import random
-
     if not memory:
         return ""
 

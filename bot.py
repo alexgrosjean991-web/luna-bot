@@ -8,7 +8,7 @@ from collections import defaultdict
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-from settings import TELEGRAM_BOT_TOKEN
+from settings import TELEGRAM_BOT_TOKEN, BOT_VERSION
 
 
 # ============== MEDIUM FIX: Structured JSON logging ==============
@@ -204,7 +204,7 @@ async def health_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     health_msg = f"""🏥 Health Check
 
-**Bot**: ✅ Running
+**Bot**: ✅ Running (v{BOT_VERSION})
 **DB**: {db_status}
 **Uptime**: {hours}h {minutes}m {seconds}s
 

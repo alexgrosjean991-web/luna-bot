@@ -31,6 +31,10 @@ if not ANTHROPIC_API_KEY:
 LLM_MODEL = "claude-3-5-haiku-20241022"
 MAX_TOKENS = 80           # Assez pour une réponse complète
 HISTORY_LIMIT = 20
+ANTHROPIC_API_VERSION = "2023-06-01"  # LOW FIX: API versioning
+
+# Bot version
+BOT_VERSION = "1.0.0"
 
 # DB Pool
 DB_POOL_MIN = 2

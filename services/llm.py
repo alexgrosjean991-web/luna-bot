@@ -4,7 +4,7 @@ import asyncio
 import logging
 import httpx
 from pathlib import Path
-from settings import ANTHROPIC_API_KEY, LLM_MODEL, MAX_TOKENS
+from settings import ANTHROPIC_API_KEY, LLM_MODEL, MAX_TOKENS, ANTHROPIC_API_VERSION
 
 # ============== HIGH FIX: Retry configuration ==============
 MAX_RETRIES = 3
@@ -107,7 +107,7 @@ async def generate_response(
 
     headers = {
         "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
+        "anthropic-version": ANTHROPIC_API_VERSION,
         "content-type": "application/json"
     }
 
