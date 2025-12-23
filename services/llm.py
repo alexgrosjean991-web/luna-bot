@@ -3,30 +3,37 @@ import logging
 import httpx
 from pathlib import Path
 from settings import ANTHROPIC_API_KEY, LLM_MODEL, MAX_TOKENS
+from services.memory import format_memory_for_prompt
 
 logger = logging.getLogger(__name__)
 
-# Charger le system prompt
+# Charger le system prompt de base
 PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "luna.txt"
-SYSTEM_PROMPT = PROMPT_PATH.read_text(encoding="utf-8")
+BASE_SYSTEM_PROMPT = PROMPT_PATH.read_text(encoding="utf-8")
 
 
 async def generate_response(
     user_message: str,
     history: list[dict],
-    memory: dict | None = None  # Phase 2
+    memory: dict | None = None
 ) -> str:
     """
-    Génère une réponse Luna.
+    Génère une réponse Luna avec mémoire.
 
     Args:
         user_message: Dernier message de l'utilisateur
         history: Historique [{"role": "user/assistant", "content": "..."}]
-        memory: Mémoire extraite (Phase 2, ignoré pour l'instant)
+        memory: Mémoire extraite de l'utilisateur
 
     Returns:
         Réponse de Luna
     """
+    # Construire le system prompt avec mémoire
+    if memory:
+        memory_text = format_memory_for_prompt(memory)
+        system_prompt = f"{BASE_SYSTEM_PROMPT}\n\n## CE QUE TU SAIS SUR LUI:\n{memory_text}"
+    else:
+        system_prompt = BASE_SYSTEM_PROMPT
 
     # Construire les messages (historique + message actuel)
     messages = history.copy()
@@ -41,7 +48,7 @@ async def generate_response(
     payload = {
         "model": LLM_MODEL,
         "max_tokens": MAX_TOKENS,
-        "system": SYSTEM_PROMPT,
+        "system": system_prompt,
         "messages": messages[-20:]  # Derniers 20 messages
     }
 

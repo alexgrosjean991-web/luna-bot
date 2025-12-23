@@ -1,4 +1,5 @@
 """Gestion PostgreSQL."""
+import json
 import logging
 import asyncpg
 from settings import DB_CONFIG, HISTORY_LIMIT
@@ -15,6 +16,22 @@ async def init_db() -> None:
     pool = await asyncpg.create_pool(**DB_CONFIG, min_size=1, max_size=5)
 
     async with pool.acquire() as conn:
+        # Table users avec mémoire
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                telegram_id BIGINT UNIQUE NOT NULL,
+                memory JSONB DEFAULT '{}',
+                total_messages INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_users_telegram
+            ON users(telegram_id)
+        """)
+
+        # Table conversations
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS conversations_minimal (
                 id SERIAL PRIMARY KEY,
@@ -62,3 +79,62 @@ async def save_message(user_id: int, role: str, content: str) -> None:
             INSERT INTO conversations_minimal (user_id, role, content)
             VALUES ($1, $2, $3)
         """, user_id, role, content)
+
+
+async def get_or_create_user(telegram_id: int) -> dict:
+    """Récupère ou crée un utilisateur."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, telegram_id, memory, total_messages FROM users WHERE telegram_id = $1",
+            telegram_id
+        )
+        if row:
+            return dict(row)
+
+        # Créer le user
+        row = await conn.fetchrow(
+            """
+            INSERT INTO users (telegram_id) VALUES ($1)
+            RETURNING id, telegram_id, memory, total_messages
+            """,
+            telegram_id
+        )
+        return dict(row)
+
+
+async def get_user_memory(user_id: int) -> dict:
+    """Récupère la mémoire d'un utilisateur."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT memory FROM users WHERE id = $1",
+            user_id
+        )
+        if row and row["memory"]:
+            mem = row["memory"]
+            return json.loads(mem) if isinstance(mem, str) else mem
+        return {}
+
+
+async def update_user_memory(user_id: int, memory: dict) -> None:
+    """Met à jour la mémoire d'un utilisateur."""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET memory = $1 WHERE id = $2",
+            json.dumps(memory, ensure_ascii=False),
+            user_id
+        )
+
+
+async def increment_message_count(user_id: int) -> int:
+    """Incrémente et retourne le compteur de messages."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE users
+            SET total_messages = total_messages + 1
+            WHERE id = $1
+            RETURNING total_messages
+            """,
+            user_id
+        )
+        return row["total_messages"] if row else 0

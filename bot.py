@@ -4,8 +4,12 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 from settings import TELEGRAM_BOT_TOKEN
-from services.db import init_db, close_db, save_message, get_history
+from services.db import (
+    init_db, close_db, save_message, get_history,
+    get_or_create_user, get_user_memory, update_user_memory, increment_message_count
+)
 from services.llm import generate_response
+from services.memory import extract_memory
 
 # Logging
 logging.basicConfig(
@@ -14,6 +18,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Extraction mémoire tous les X messages
+MEMORY_EXTRACTION_INTERVAL = 5
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handler /start."""
@@ -21,31 +28,46 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handler messages texte."""
-    user = update.effective_user
-    user_id = user.id
+    """Handler messages texte avec extraction mémoire."""
+    tg_user = update.effective_user
+    telegram_id = tg_user.id
     user_text = update.message.text
 
     if not user_text:
         return
 
-    logger.info(f"[{user.first_name}] {user_text}")
+    logger.info(f"[{tg_user.first_name}] {user_text}")
 
-    # Récupérer historique
-    history = await get_history(user_id)
+    # 1. Get/create user
+    user = await get_or_create_user(telegram_id)
+    user_id = user["id"]
 
-    # Sauvegarder message user
+    # 2. Sauvegarder message user
     await save_message(user_id, "user", user_text)
 
-    # Générer réponse
-    response = await generate_response(user_text, history)
+    # 3. Incrémenter compteur
+    msg_count = await increment_message_count(user_id)
 
-    # Sauvegarder réponse Luna
+    # 4. Récupérer historique + mémoire
+    history = await get_history(user_id)
+    memory = await get_user_memory(user_id)
+
+    # 5. Générer réponse avec mémoire
+    response = await generate_response(user_text, history, memory)
+
+    # 6. Sauvegarder réponse Luna
     await save_message(user_id, "assistant", response)
 
     logger.info(f"[Luna] {response}")
 
-    # Envoyer
+    # 7. Extraction mémoire périodique
+    if msg_count % MEMORY_EXTRACTION_INTERVAL == 0:
+        logger.info(f"Extraction mémoire pour user {user_id} (msg #{msg_count})")
+        updated_history = await get_history(user_id, limit=10)
+        new_memory = await extract_memory(updated_history, memory)
+        await update_user_memory(user_id, new_memory)
+
+    # 8. Envoyer
     await update.message.reply_text(response)
 
 
