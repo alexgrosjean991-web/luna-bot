@@ -2,8 +2,9 @@
 import logging
 import httpx
 from pathlib import Path
-from settings import ANTHROPIC_API_KEY, LLM_MODEL, MAX_TOKENS, TEMPERATURE
+from settings import ANTHROPIC_API_KEY, LLM_MODEL, MAX_TOKENS
 from services.memory import format_memory_for_prompt
+from services.persona import get_phase_instructions, get_phase_temperature
 
 logger = logging.getLogger(__name__)
 
@@ -15,25 +16,39 @@ BASE_SYSTEM_PROMPT = PROMPT_PATH.read_text(encoding="utf-8")
 async def generate_response(
     user_message: str,
     history: list[dict],
-    memory: dict | None = None
+    memory: dict | None = None,
+    phase: str = "hook",
+    day_count: int = 1
 ) -> str:
     """
-    Génère une réponse Luna avec mémoire.
+    Génère une réponse Luna adaptée à la phase.
 
     Args:
         user_message: Dernier message de l'utilisateur
         history: Historique [{"role": "user/assistant", "content": "..."}]
         memory: Mémoire extraite de l'utilisateur
+        phase: Phase de la relation (hook, deepen, attach, convert)
+        day_count: Numéro du jour
 
     Returns:
         Réponse de Luna
     """
-    # Construire le system prompt avec mémoire
+    # 1. Construire le system prompt
+    system_parts = [BASE_SYSTEM_PROMPT]
+
+    # 2. Ajouter la mémoire
     if memory:
         memory_text = format_memory_for_prompt(memory)
-        system_prompt = f"{BASE_SYSTEM_PROMPT}\n\n## CE QUE TU SAIS SUR LUI:\n{memory_text}"
-    else:
-        system_prompt = BASE_SYSTEM_PROMPT
+        system_parts.append(f"\n## CE QUE TU SAIS SUR LUI:\n{memory_text}")
+
+    # 3. Ajouter les instructions de phase
+    phase_instructions = get_phase_instructions(phase, day_count)
+    system_parts.append(phase_instructions)
+
+    system_prompt = "\n".join(system_parts)
+
+    # 4. Température selon la phase
+    temperature = get_phase_temperature(phase)
 
     # Construire les messages (historique + message actuel)
     messages = history.copy()
@@ -48,7 +63,7 @@ async def generate_response(
     payload = {
         "model": LLM_MODEL,
         "max_tokens": MAX_TOKENS,
-        "temperature": TEMPERATURE,
+        "temperature": temperature,
         "system": system_prompt,
         "messages": messages[-20:]  # Derniers 20 messages
     }

@@ -70,6 +70,20 @@ async def init_db() -> None:
             ON proactive_log(user_id, sent_at DESC)
         """)
 
+        # Colonnes pour progression relation
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            phase VARCHAR(20) DEFAULT 'hook'
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            first_message_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            day_count INTEGER DEFAULT 1
+        """)
+
     logger.info("DB connectée")
 
 
@@ -214,3 +228,47 @@ async def log_proactive(user_id: int, message_type: str) -> None:
             INSERT INTO proactive_log (user_id, message_type)
             VALUES ($1, $2)
         """, user_id, message_type)
+
+
+# Seuils de phase
+PHASE_THRESHOLDS = {
+    "hook": (1, 3),
+    "deepen": (4, 5),
+    "attach": (6, 7),
+    "convert": (8, 999),
+}
+
+
+async def get_user_phase(user_id: int) -> tuple[str, int]:
+    """Calcule la phase actuelle et le jour de relation."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT first_message_at, phase FROM users WHERE id = $1
+        """, user_id)
+
+        if not row or not row["first_message_at"]:
+            return "hook", 1
+
+        first_msg = row["first_message_at"]
+        now = datetime.now(PARIS_TZ)
+
+        # Rendre timezone-aware si nécessaire
+        if first_msg.tzinfo is None:
+            first_msg = first_msg.replace(tzinfo=PARIS_TZ)
+
+        day_count = (now - first_msg).days + 1
+
+        # Déterminer la phase
+        phase = "convert"
+        for phase_name, (start, end) in PHASE_THRESHOLDS.items():
+            if start <= day_count <= end:
+                phase = phase_name
+                break
+
+        # Mettre à jour si changé
+        if phase != row["phase"]:
+            await conn.execute("""
+                UPDATE users SET phase = $1, day_count = $2 WHERE id = $3
+            """, phase, day_count, user_id)
+
+        return phase, day_count

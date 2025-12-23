@@ -8,7 +8,8 @@ from settings import TELEGRAM_BOT_TOKEN
 from services.db import (
     init_db, close_db, save_message, get_history,
     get_or_create_user, get_user_memory, update_user_memory, increment_message_count,
-    update_last_active, get_users_for_proactive, count_proactive_today, log_proactive
+    update_last_active, get_users_for_proactive, count_proactive_today, log_proactive,
+    get_user_phase
 )
 from services.llm import generate_response
 from services.memory import extract_memory
@@ -57,12 +58,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # 3. Incrémenter compteur
     msg_count = await increment_message_count(user_id)
 
-    # 4. Récupérer historique + mémoire
+    # 4. Récupérer historique + mémoire + phase
     history = await get_history(user_id)
     memory = await get_user_memory(user_id)
+    phase, day_count = await get_user_phase(user_id)
 
-    # 5. Générer réponse avec mémoire
-    response = await generate_response(user_text, history, memory)
+    logger.info(f"User {user_id}: Phase={phase}, Day={day_count}")
+
+    # 5. Générer réponse avec mémoire et phase
+    response = await generate_response(user_text, history, memory, phase, day_count)
 
     # 6. Sauvegarder réponse Luna
     await save_message(user_id, "assistant", response)
