@@ -33,10 +33,11 @@ MAX_TOKENS = 80           # Assez pour une réponse complète
 HISTORY_LIMIT = 20
 ANTHROPIC_API_VERSION = "2023-06-01"  # LOW FIX: API versioning
 
-# OpenRouter (modèle premium)
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-PREMIUM_MODEL = "sophosympatheia/midnight-rose-70b"
-MAX_TOKENS_PREMIUM = 40  # Très court pour style Luna texto
+# Venice.ai (modèle premium NSFW)
+VENICE_API_KEY = os.getenv("VENICE_API_KEY", "")
+VENICE_URL = "https://api.venice.ai/api/v1/chat/completions"
+PREMIUM_MODEL = "venice-uncensored"
+MAX_TOKENS_PREMIUM = 60  # Court pour style Luna texto
 
 # Conversion
 PAYMENT_LINK = os.getenv("PAYMENT_LINK", "")

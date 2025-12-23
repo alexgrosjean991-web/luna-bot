@@ -1,4 +1,4 @@
-"""Client LLM multi-provider (Anthropic + OpenRouter) avec contexte mood/phase/story/peaks."""
+"""Client LLM multi-provider (Anthropic + Venice.ai) avec contexte mood/phase/story/peaks."""
 import re
 import asyncio
 import logging
@@ -6,7 +6,7 @@ import httpx
 from pathlib import Path
 from settings import (
     ANTHROPIC_API_KEY, LLM_MODEL, MAX_TOKENS, ANTHROPIC_API_VERSION,
-    OPENROUTER_API_KEY, MAX_TOKENS_PREMIUM
+    VENICE_API_KEY, VENICE_URL, MAX_TOKENS_PREMIUM
 )
 
 # ============== HIGH FIX: Retry configuration ==============
@@ -38,45 +38,42 @@ PROMPT_NSFW_PATH = Path(__file__).parent.parent / "prompts" / "luna_nsfw.txt"
 BASE_SYSTEM_PROMPT = PROMPT_PATH.read_text(encoding="utf-8")
 NSFW_SYSTEM_PROMPT = PROMPT_NSFW_PATH.read_text(encoding="utf-8")
 
-# URLs des APIs
+# URL Anthropic
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
-async def call_openrouter(
+async def call_venice(
     messages: list[dict],
     system_prompt: str,
-    model: str = "sao10k/l3.3-euryale-70b",
-    max_tokens: int = 150,
-    temperature: float = 0.9
+    model: str = "venice-uncensored",
+    max_tokens: int = 60,
+    temperature: float = 0.75
 ) -> str:
     """
-    Appelle l'API OpenRouter pour les modèles premium.
+    Appelle l'API Venice.ai pour les modèles premium NSFW.
 
     Args:
         messages: Historique de conversation
         system_prompt: System prompt Luna
-        model: Modèle OpenRouter à utiliser
+        model: Modèle Venice à utiliser
         max_tokens: Tokens max pour la réponse
         temperature: Température (créativité)
 
     Returns:
         Réponse générée ou message d'erreur
     """
-    if not OPENROUTER_API_KEY:
-        logger.error("OPENROUTER_API_KEY non configuré")
+    if not VENICE_API_KEY:
+        logger.error("VENICE_API_KEY non configuré")
         return "dsl je bug 😅"
 
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://luna-app.com",
-        "X-Title": "Luna"
+        "Authorization": f"Bearer {VENICE_API_KEY}",
+        "Content-Type": "application/json"
     }
 
     # Format OpenAI (system message + conversation)
     formatted_messages = [{"role": "system", "content": system_prompt}]
-    for msg in messages[-20:]:  # Limiter à 20 messages
+    for msg in messages[-10:]:  # Limiter à 10 messages pour contexte propre
         formatted_messages.append({
             "role": msg["role"],
             "content": msg["content"]
@@ -95,7 +92,7 @@ async def call_openrouter(
         try:
             async with httpx.AsyncClient(timeout=45) as client:
                 response = await client.post(
-                    OPENROUTER_URL,
+                    VENICE_URL,
                     headers=headers,
                     json=payload
                 )
@@ -106,7 +103,7 @@ async def call_openrouter(
 
         except httpx.TimeoutException as e:
             last_error = e
-            logger.warning(f"OpenRouter timeout (attempt {attempt + 1}/{MAX_RETRIES})")
+            logger.warning(f"Venice timeout (attempt {attempt + 1}/{MAX_RETRIES})")
             if attempt < MAX_RETRIES - 1:
                 await asyncio.sleep(RETRY_DELAYS[attempt])
 
@@ -114,25 +111,25 @@ async def call_openrouter(
             status = e.response.status_code
             if status == 429:
                 last_error = e
-                logger.warning(f"OpenRouter rate limited (attempt {attempt + 1}/{MAX_RETRIES})")
+                logger.warning(f"Venice rate limited (attempt {attempt + 1}/{MAX_RETRIES})")
                 if attempt < MAX_RETRIES - 1:
                     await asyncio.sleep(RETRY_DELAYS[attempt] * 2)
             elif 400 <= status < 500:
-                logger.error(f"OpenRouter client error {status}: {e}")
+                logger.error(f"Venice client error {status}: {e}")
                 return "dsl j'ai bugé 😅"
             else:
                 last_error = e
-                logger.warning(f"OpenRouter server error {status} (attempt {attempt + 1}/{MAX_RETRIES})")
+                logger.warning(f"Venice server error {status} (attempt {attempt + 1}/{MAX_RETRIES})")
                 if attempt < MAX_RETRIES - 1:
                     await asyncio.sleep(RETRY_DELAYS[attempt])
 
         except Exception as e:
             last_error = e
-            logger.error(f"OpenRouter unexpected error: {type(e).__name__}: {e}")
+            logger.error(f"Venice unexpected error: {type(e).__name__}: {e}")
             if attempt < MAX_RETRIES - 1:
                 await asyncio.sleep(RETRY_DELAYS[attempt])
 
-    logger.error(f"OpenRouter failed after {MAX_RETRIES} attempts: {last_error}")
+    logger.error(f"Venice failed after {MAX_RETRIES} attempts: {last_error}")
     return "dsl je lag un peu 😅"
 
 
@@ -166,8 +163,8 @@ async def generate_response(
     Returns:
         Réponse de Luna
     """
-    # 1. Construire le system prompt (NSFW pour OpenRouter)
-    base_prompt = NSFW_SYSTEM_PROMPT if provider == "openrouter" else BASE_SYSTEM_PROMPT
+    # 1. Construire le system prompt (NSFW pour Venice)
+    base_prompt = NSFW_SYSTEM_PROMPT if provider == "venice" else BASE_SYSTEM_PROMPT
     system_parts = [base_prompt]
 
     # 2. Ajouter la mémoire
@@ -218,16 +215,16 @@ async def generate_response(
     messages = history.copy()
     messages.append({"role": "user", "content": user_message})
 
-    # ============== ROUTER: OpenRouter pour premium ==============
-    if provider == "openrouter":
-        model = model_override or "sao10k/l3.3-euryale-70b"
-        logger.info(f"Using OpenRouter ({model})")
-        return await call_openrouter(
+    # ============== ROUTER: Venice pour premium NSFW ==============
+    if provider == "venice":
+        model = model_override or "venice-uncensored"
+        logger.info(f"Using Venice ({model})")
+        return await call_venice(
             messages=messages,
             system_prompt=system_prompt,
             model=model,
             max_tokens=MAX_TOKENS_PREMIUM,
-            temperature=0.75  # Fixe pour cohérence du style Luna
+            temperature=0.75
         )
 
     # ============== Anthropic (default) ==============
