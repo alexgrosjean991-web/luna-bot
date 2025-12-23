@@ -188,7 +188,7 @@ class NSFWManager:
         is_converted: bool
     ) -> Tuple[bool, NSFWLevel]:
         """
-        Détermine si on doit utiliser le modèle NSFW.
+        Détermine si on doit utiliser le modèle NSFW (Dolphin).
 
         Returns:
             (use_nsfw_model, current_level)
@@ -197,13 +197,24 @@ class NSFWManager:
         level = self.get_nsfw_level(affection, is_converted)
         config = self.get_config(level)
 
-        # Détecter si le message a une intention NSFW
+        # Détecter si le message a une intention NSFW/romantique/sensuelle
         has_nsfw_intent = self._detect_nsfw_intent(user_message)
 
-        # On utilise le modèle NSFW seulement si:
-        # 1. Le niveau le permet (EXPLICIT ou DEVOTED)
-        # 2. ET l'user a une intention NSFW (ou niveau DEVOTED)
-        use_model = config.use_nsfw_model and (has_nsfw_intent or level == NSFWLevel.DEVOTED)
+        # LOGIQUE SIMPLIFIÉE:
+        # - SOFT, EXPLICIT, DEVOTED (affection >= 50): TOUJOURS Dolphin
+        #   Car Haiku refuse TOUT contenu romantique/sensuel
+        # - REFUSE, TEASING: Haiku OK car on ne fait que tease
+
+        if level in [NSFWLevel.SOFT, NSFWLevel.EXPLICIT, NSFWLevel.DEVOTED]:
+            # Affection >= 50: TOUJOURS utiliser Dolphin pour éviter les refus Haiku
+            use_model = True
+            logger.info(f"🔥 NSFW ROUTING: Level={level.name}, affection>=50 → DOLPHIN")
+        else:
+            # Affection < 50: utiliser Haiku (on fait que tease/refuse de manière flirty)
+            use_model = False
+            logger.info(f"💬 NSFW ROUTING: Level={level.name}, affection<50 → HAIKU")
+
+        logger.info(f"📊 NSFW Detection: intent={has_nsfw_intent}, level={level.name}, use_dolphin={use_model}")
 
         return use_model, level
 
@@ -240,10 +251,17 @@ Fais-lui sentir que c'est possible... mais pas encore.
             "nude", "naked", "sex", "fuck", "dick", "cock", "pussy",
             "undress", "strip", "horny", "cum", "suck", "lick", "ass",
             "boobs", "tits", "blowjob", "handjob",
-            # Français
+            # Français explicite
             "nue", "nu", "sexe", "baise", "bite", "chatte", "sucer",
             "lécher", "cul", "seins", "nichons", "pipe", "branler",
-            "mouillée", "bandant", "excité"
+            "mouillée", "bandant", "excité", "jouir", "orgasme",
+            "déshabille", "string", "culotte", "soutif", "sous-vêtements",
+            # Français sensuel (Haiku refuse aussi ça!)
+            "peau", "corps", "caresse", "toucher", "sentir",
+            "nu contre", "peau contre", "corps contre",
+            "embrasse", "lèvres", "langue", "cou", "nuque",
+            "frisson", "chaleur", "désir", "envie de toi",
+            "dans mes bras", "serrer", "coller", "blottir"
         ]
 
         if any(kw in text_lower for kw in explicit_keywords):

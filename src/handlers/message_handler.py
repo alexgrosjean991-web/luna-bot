@@ -677,7 +677,8 @@ SI IL INSISTE: "t'es vraiment bizarre", "pk tu demandes ça", "j'aime pas ces qu
         response = await llm_service.generate_response(
             system_prompt=system_prompt,
             messages=api_messages,
-            is_nsfw=use_nsfw_model
+            is_nsfw=use_nsfw_model,
+            is_french=is_french
         )
 
         # === ZEIGARNIK EFFECT - Open Loops ===
