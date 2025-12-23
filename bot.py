@@ -1,11 +1,14 @@
 import asyncio
 import logging
+from datetime import datetime, timedelta
 from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler as TGMessageHandler, filters
 
 from config.settings import config
 from src.database.models import db
 from src.handlers.message_handler import MessageHandler
+from src.services.proactive_messages import ProactiveMessageService
+from src.services.memory_service import ConversionManager
 
 # Setup logging
 logging.basicConfig(
@@ -14,8 +17,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global message handler instance
+# Global instances
 msg_handler = None
+proactive_service = None
 
 
 async def start_command(update: Update, context) -> None:
@@ -129,16 +133,72 @@ async def handle_message(update: Update, context) -> None:
         await msg_handler.handle_message(update, context)
 
 
+async def proactive_job(context) -> None:
+    """Job qui vérifie et envoie les messages proactifs"""
+    global proactive_service
+
+    if not proactive_service:
+        return
+
+    try:
+        # Get all active users
+        active_users = await proactive_service.get_all_active_users()
+
+        for user_data in active_users:
+            try:
+                user_id = user_data['user_id']
+                telegram_id = user_data['telegram_id']
+                affection = user_data.get('affection_level', 10)
+                language = user_data.get('language_code', 'en')
+                is_french = language.startswith('fr')
+
+                # Calculate day number
+                created_at = user_data.get('created_at')
+                if created_at:
+                    if isinstance(created_at, str):
+                        created_at = datetime.fromisoformat(created_at)
+                    day_number = (datetime.now() - created_at).days + 1
+                else:
+                    day_number = 1
+
+                # Check if converted
+                tier = user_data.get('subscription_tier', 'free')
+                expires = user_data.get('subscription_expires_at')
+                is_converted = tier in ['chouchou', 'amoureux', 'ame_soeur'] and expires and expires > datetime.now()
+
+                # Try to send proactive message
+                await proactive_service.check_and_send_proactive(
+                    bot=context.bot,
+                    user_id=user_id,
+                    telegram_id=telegram_id,
+                    affection=affection,
+                    day_number=day_number,
+                    is_converted=is_converted,
+                    is_french=is_french
+                )
+
+                # Small delay between users to avoid rate limiting
+                await asyncio.sleep(0.5)
+
+            except Exception as e:
+                logger.error(f"Error processing proactive for user {user_data.get('user_id')}: {e}")
+                continue
+
+    except Exception as e:
+        logger.error(f"Error in proactive job: {e}")
+
+
 async def post_init(application: Application) -> None:
     """Setup after bot starts"""
-    global msg_handler
-    
+    global msg_handler, proactive_service
+
     # Connect to database
     await db.connect()
-    
-    # Initialize message handler
+
+    # Initialize handlers and services
     msg_handler = MessageHandler(db)
-    
+    proactive_service = ProactiveMessageService(db)
+
     # Set bot commands
     commands = [
         BotCommand("start", "Start chatting"),
@@ -146,7 +206,19 @@ async def post_init(application: Application) -> None:
         BotCommand("help", "Get help"),
     ]
     await application.bot.set_my_commands(commands)
-    
+
+    # Setup proactive messages job (runs every 30 minutes)
+    job_queue = application.job_queue
+    if job_queue:
+        # Run proactive check every 30 minutes
+        job_queue.run_repeating(
+            proactive_job,
+            interval=timedelta(minutes=30),
+            first=timedelta(minutes=5),  # First run after 5 minutes
+            name="proactive_messages"
+        )
+        logger.info("Proactive messages job scheduled (every 30 min)")
+
     logger.info("Luna is online! 💕")
 
 

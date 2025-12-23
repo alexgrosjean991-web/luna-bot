@@ -26,20 +26,158 @@ class HumanizerServiceFR:
     async def humanize_response(self, response: str, mood: str = "happy",
                                  user_message_length: int = 0) -> Tuple[List[str], float]:
         """Transform response to feel more human"""
-        
+
         delay = self._calculate_delay(response, user_message_length)
         text = response
-        
+
         if random.random() < 0.06:
             text = self._add_typo(text)
-        
+
         if random.random() < 0.25:
             text = self._maybe_add_emoji(text, mood)
-        
+
         text = self._casualize_fr(text)
         messages = self._maybe_split(text)
-        
+
         return messages, delay
+
+    async def humanize_text(self, text: str, mood: str = "happy") -> str:
+        """Humanize a single text message (for use with realistic_delays)"""
+
+        # Maybe add typo (6% chance)
+        if random.random() < 0.06:
+            text = self._add_typo(text)
+
+        # Maybe add visible correction (4% chance)
+        if random.random() < 0.04:
+            text = self._add_visible_correction(text)
+
+        # Maybe add emoji (20% chance)
+        if random.random() < 0.20:
+            text = self._maybe_add_emoji(text, mood)
+
+        # Casualize
+        text = self._casualize_fr(text)
+
+        return text
+
+    def _add_visible_correction(self, text: str) -> str:
+        """
+        Ajoute une correction visible comme un vrai humain.
+        Ex: "je t'aome" → "aime*"
+        """
+        words = text.split()
+        if len(words) < 3:
+            return text
+
+        # Choisir un mot à "mal écrire" puis corriger
+        idx = random.randint(1, min(4, len(words) - 1))
+        word = words[idx]
+
+        if len(word) < 4:
+            return text
+
+        # Types de corrections
+        correction_types = [
+            # Inversion de lettres
+            lambda w: w[:2] + w[3] + w[2] + w[4:] if len(w) > 4 else w,
+            # Lettre manquante
+            lambda w: w[:len(w)//2] + w[len(w)//2+1:],
+            # Double lettre
+            lambda w: w[:2] + w[2] + w[2:],
+        ]
+
+        try:
+            typo_word = random.choice(correction_types)(word)
+            if typo_word != word:
+                words[idx] = typo_word
+                # Ajouter la correction après
+                words.insert(idx + 1, f"{word}*")
+        except:
+            pass
+
+        return " ".join(words)
+
+    def maybe_create_interrupted_message(self, text: str, mood: str) -> Tuple[List[str], bool]:
+        """
+        Parfois Luna s'interrompt comme un vrai humain.
+        Retourne (messages, was_interrupted)
+        """
+        # 3% chance d'interruption
+        if random.random() > 0.03 or len(text) < 30:
+            return [text], False
+
+        interrupt_patterns = [
+            # Message coupé puis reprise
+            {
+                "cut": lambda t: t[:len(t)//3] + "...",
+                "followup": lambda t: "dsl " + t
+            },
+            # Commence puis "attends"
+            {
+                "cut": lambda t: t[:len(t)//4] + "-",
+                "followup": lambda t: "pardon, " + t
+            },
+            # S'interrompt pour autre chose
+            {
+                "cut": lambda t: t[:len(t)//3],
+                "followup": lambda t: "bref " + t[len(t)//3:]
+            },
+            # "attends" puis message complet
+            {
+                "cut": "attends",
+                "followup": lambda t: t
+            },
+            # Pensée incomplète
+            {
+                "cut": lambda t: "en fait " + t[:len(t)//4] + "...",
+                "followup": lambda t: "nan rien laisse mdr"
+            },
+        ]
+
+        pattern = random.choice(interrupt_patterns)
+
+        cut = pattern["cut"](text) if callable(pattern["cut"]) else pattern["cut"]
+        followup = pattern["followup"](text) if callable(pattern["followup"]) else pattern["followup"]
+
+        return [cut, followup], True
+
+    def maybe_add_stutter_hesitation(self, text: str) -> str:
+        """
+        Ajoute parfois des hésitations naturelles.
+        "je... je sais pas", "euh", "enfin"
+        """
+        if random.random() > 0.08:  # 8% chance
+            return text
+
+        hesitations_start = [
+            "euh ",
+            "hm ",
+            "enfin ",
+            "genre ",
+            "bah ",
+            "jsp ",
+        ]
+
+        hesitations_middle = [
+            " enfin ",
+            " genre ",
+            " tu vois ",
+            " quoi ",
+        ]
+
+        if random.random() < 0.6:
+            # Hésitation au début
+            text = random.choice(hesitations_start) + text.lstrip()
+        else:
+            # Hésitation au milieu
+            words = text.split()
+            if len(words) > 4:
+                mid = len(words) // 2
+                words.insert(mid, random.choice(hesitations_middle).strip())
+                text = " ".join(words)
+
+        return text
     
     def _calculate_delay(self, response: str, user_len: int) -> float:
         """Calculate realistic typing delay"""
