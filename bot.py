@@ -45,9 +45,43 @@ logger = logging.getLogger(__name__)
 # Extraction mémoire tous les X messages
 MEMORY_EXTRACTION_INTERVAL = 5
 
-# Rate limiting (en mémoire, acceptable car non-critique)
-RATE_LIMIT_SECONDS = 1.0
-user_last_message: dict[int, float] = defaultdict(float)
+# ============== HIGH FIX: Rate limiting robuste ==============
+class RateLimiter:
+    """Rate limiter avec sliding window."""
+
+    def __init__(self, window_seconds: float = 60.0, max_requests: int = 20):
+        self.window_seconds = window_seconds
+        self.max_requests = max_requests
+        self._requests: dict[int, list[float]] = defaultdict(list)
+
+    def is_allowed(self, user_id: int) -> bool:
+        """Vérifie si l'utilisateur peut envoyer un message."""
+        now = time.time()
+
+        # Nettoyer les anciennes requêtes
+        self._requests[user_id] = [
+            t for t in self._requests[user_id]
+            if now - t < self.window_seconds
+        ]
+
+        # Vérifier la limite
+        if len(self._requests[user_id]) >= self.max_requests:
+            return False
+
+        # Enregistrer la requête
+        self._requests[user_id].append(now)
+        return True
+
+    def get_wait_time(self, user_id: int) -> float:
+        """Retourne le temps d'attente avant de pouvoir renvoyer."""
+        if not self._requests[user_id]:
+            return 0
+        oldest = min(self._requests[user_id])
+        return max(0, self.window_seconds - (time.time() - oldest))
+
+
+# 20 messages par minute max
+rate_limiter = RateLimiter(window_seconds=60.0, max_requests=20)
 
 # ============== CRITICAL FIX: Sanitization ==============
 MAX_MESSAGE_LENGTH = 2000
@@ -75,6 +109,48 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(welcome)
 
 
+# ============== HIGH FIX: Health check ==============
+import os
+from datetime import datetime
+
+HEALTH_FILE = "/tmp/luna_health"
+BOT_START_TIME = datetime.now()
+
+
+async def health_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handler /health - vérifie l'état du bot."""
+    try:
+        # Vérifier la DB
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+        db_status = "✅ OK"
+    except Exception as e:
+        db_status = f"❌ {e}"
+
+    uptime = datetime.now() - BOT_START_TIME
+    hours, remainder = divmod(int(uptime.total_seconds()), 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    health_msg = f"""🏥 Health Check
+
+**Bot**: ✅ Running
+**DB**: {db_status}
+**Uptime**: {hours}h {minutes}m {seconds}s
+**Rate limiter**: {len(rate_limiter._requests)} users tracked
+"""
+    await update.message.reply_text(health_msg, parse_mode="Markdown")
+
+
+def write_health_file():
+    """Écrit un fichier health pour Docker."""
+    try:
+        with open(HEALTH_FILE, "w") as f:
+            f.write(str(datetime.now().timestamp()))
+    except Exception:
+        pass
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handler principal avec tous les systèmes intégrés."""
     tg_user = update.effective_user
@@ -85,12 +161,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not user_text:
         return
 
-    # Rate limiting
-    now = time.time()
-    if now - user_last_message[telegram_id] < RATE_LIMIT_SECONDS:
-        logger.warning(f"Rate limit: {tg_user.first_name}")
+    # HIGH FIX: Rate limiting robuste (sliding window)
+    if not rate_limiter.is_allowed(telegram_id):
+        wait_time = rate_limiter.get_wait_time(telegram_id)
+        logger.warning(f"Rate limit: {tg_user.first_name} (wait {wait_time:.0f}s)")
         return
-    user_last_message[telegram_id] = now
 
     logger.info(f"[{tg_user.first_name}] {user_text[:100]}...")  # Tronquer dans les logs
 
@@ -278,6 +353,7 @@ async def send_proactive_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
 async def post_init(application: Application) -> None:
     """Appelé après init."""
     await init_db()
+    write_health_file()  # HIGH FIX: health check file
 
 
 async def post_shutdown(application: Application) -> None:
@@ -299,6 +375,7 @@ def main() -> None:
 
     # Handlers
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("health", health_check))  # HIGH FIX: health check
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Jobs proactifs - toutes les 30 minutes

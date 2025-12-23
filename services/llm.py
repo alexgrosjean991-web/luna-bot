@@ -1,9 +1,14 @@
 """Client LLM (Anthropic Claude) avec contexte mood/phase/story/peaks."""
 import re
+import asyncio
 import logging
 import httpx
 from pathlib import Path
 from settings import ANTHROPIC_API_KEY, LLM_MODEL, MAX_TOKENS
+
+# ============== HIGH FIX: Retry configuration ==============
+MAX_RETRIES = 3
+RETRY_DELAYS = [1, 2, 4]  # Backoff exponentiel en secondes
 from services.memory import format_memory_for_prompt, get_memory_recall_instruction
 from services.relationship import get_phase_instructions, get_phase_temperature
 from services.mood import get_mood_instructions, get_mood_context
@@ -114,18 +119,51 @@ async def generate_response(
         "messages": messages[-20:]  # Derniers 20 messages
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers=headers,
-                json=payload
-            )
-            response.raise_for_status()
-            data = response.json()
-            raw_text = data["content"][0]["text"]
-            # Supprimer les astérisques d'action
-            return clean_response(raw_text)
-    except Exception as e:
-        logger.error(f"Erreur LLM: {e}")
-        return "dsl j'ai bugé 😅"
+    # ============== HIGH FIX: Retry avec backoff ==============
+    last_error = None
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers=headers,
+                    json=payload
+                )
+                response.raise_for_status()
+                data = response.json()
+                raw_text = data["content"][0]["text"]
+                return clean_response(raw_text)
+
+        except httpx.TimeoutException as e:
+            last_error = e
+            logger.warning(f"LLM timeout (attempt {attempt + 1}/{MAX_RETRIES})")
+            if attempt < MAX_RETRIES - 1:
+                await asyncio.sleep(RETRY_DELAYS[attempt])
+
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            # Ne pas retry sur erreurs client (4xx) sauf rate limit (429)
+            if status == 429:
+                last_error = e
+                logger.warning(f"LLM rate limited (attempt {attempt + 1}/{MAX_RETRIES})")
+                if attempt < MAX_RETRIES - 1:
+                    await asyncio.sleep(RETRY_DELAYS[attempt] * 2)  # Plus long pour rate limit
+            elif 400 <= status < 500:
+                logger.error(f"LLM client error {status}: {e}")
+                return "dsl j'ai bugé 😅"
+            else:
+                last_error = e
+                logger.warning(f"LLM server error {status} (attempt {attempt + 1}/{MAX_RETRIES})")
+                if attempt < MAX_RETRIES - 1:
+                    await asyncio.sleep(RETRY_DELAYS[attempt])
+
+        except Exception as e:
+            last_error = e
+            logger.error(f"LLM unexpected error: {type(e).__name__}: {e}")
+            if attempt < MAX_RETRIES - 1:
+                await asyncio.sleep(RETRY_DELAYS[attempt])
+
+    # Toutes les tentatives ont échoué
+    logger.error(f"LLM failed after {MAX_RETRIES} attempts: {last_error}")
+    return "dsl je lag un peu 😅"
