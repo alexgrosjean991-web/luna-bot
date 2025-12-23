@@ -86,7 +86,7 @@ class LLMService:
 
         payload = {
             "model": config.ANTHROPIC_MODEL,
-            "max_tokens": 300,
+            "max_tokens": 500,
             "system": system_prompt,
             "messages": api_messages
         }
@@ -132,7 +132,7 @@ class LLMService:
         payload = {
             "model": config.OPENROUTER_MODEL,
             "messages": api_messages,
-            "max_tokens": 400
+            "max_tokens": 600
         }
 
         # === DEBUG LOGGING ===
