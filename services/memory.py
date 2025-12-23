@@ -6,34 +6,39 @@ from settings import ANTHROPIC_API_KEY
 
 logger = logging.getLogger(__name__)
 
-EXTRACTION_PROMPT = """Analyse cette conversation et extrais les informations personnelles sur l'utilisateur.
+EXTRACTION_PROMPT = """Extrais UNIQUEMENT les informations sur l'UTILISATEUR (User), PAS sur Luna.
 
-CONVERSATION RÉCENTE:
+CONTEXTE IMPORTANT:
+- Luna est une IA/assistante qui parle d'elle-même (son chat Pixel, son job graphiste, Paris, etc.)
+- Tu dois IGNORER tout ce que Luna dit sur ELLE-MÊME
+- Tu extrais SEULEMENT ce que l'UTILISATEUR révèle sur LUI
+
+CONVERSATION:
 {conversation}
 
-MÉMOIRE ACTUELLE:
+MÉMOIRE ACTUELLE DE L'UTILISATEUR:
 {current_memory}
 
-Retourne UNIQUEMENT un JSON valide avec cette structure (garde les valeurs existantes si pas de nouvelle info):
+Retourne UNIQUEMENT un JSON avec les infos de L'UTILISATEUR:
 {{
     "prenom": "string ou null",
     "age": "number ou null",
     "ville": "string ou null",
     "travail": "string ou null",
-    "hobbies": ["liste", "des", "hobbies"],
-    "problemes": ["problèmes", "mentionnés"],
-    "likes": ["ce", "qu'il", "aime"],
-    "dislikes": ["ce", "qu'il", "n'aime", "pas"],
-    "facts": ["autres", "faits", "importants"],
+    "hobbies": ["liste"],
+    "problemes": ["liste"],
+    "likes": ["liste"],
+    "dislikes": ["liste"],
+    "facts": ["faits sur l'utilisateur"],
     "relationship_status": "string ou null",
-    "mood_recent": "string décrivant son humeur récente"
+    "mood_recent": "humeur de l'utilisateur"
 }}
 
-RÈGLES:
-- Ne pas inventer d'informations
-- Garder les infos existantes si pas contredites
-- Extraire SEULEMENT ce qui est explicitement dit
-- Retourner UNIQUEMENT le JSON, rien d'autre"""
+RÈGLES CRITIQUES:
+- IGNORER: chat Pixel, graphiste freelance, Paris 11ème = c'est LUNA, pas l'utilisateur
+- EXTRAIRE: seulement ce que USER dit explicitement sur lui-même
+- Ne pas inventer, ne pas confondre Luna avec l'utilisateur
+- Retourner UNIQUEMENT le JSON"""
 
 
 async def extract_memory(
