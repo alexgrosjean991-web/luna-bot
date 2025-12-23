@@ -18,6 +18,7 @@ from services.mood import get_mood_instructions, get_mood_context
 from services.story_arcs import get_story_instruction
 from services.teasing import get_teasing_instruction
 from services.emotional_peaks import get_emotional_instruction
+from services.prompt_selector import get_prompt_for_level, get_level_name
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +143,9 @@ async def generate_response(
     emotional_state: str | None = None,
     extra_instructions: str | None = None,
     provider: str = "anthropic",
-    model_override: str | None = None
+    model_override: str | None = None,
+    level: int = 1,
+    level_modifier: str | None = None
 ) -> str:
     """
     Génère une réponse Luna avec contexte complet.
@@ -158,12 +161,15 @@ async def generate_response(
         extra_instructions: Instructions V5 psychology (affection, inside jokes, etc.)
         provider: "anthropic" ou "openrouter"
         model_override: Modèle spécifique à utiliser (optionnel)
+        level: Niveau de conversation (1=SFW, 2=TENSION, 3=NSFW)
+        level_modifier: Modificateur de prompt (USER_DISTRESSED, AFTERCARE, etc.)
 
     Returns:
         Réponse de Luna
     """
-    # 1. Construire le system prompt (NSFW pour OpenRouter)
-    base_prompt = NSFW_SYSTEM_PROMPT if provider == "openrouter" else BASE_SYSTEM_PROMPT
+    # 1. Construire le system prompt basé sur le niveau
+    base_prompt = get_prompt_for_level(level, level_modifier)
+    logger.info(f"Using prompt for level {get_level_name(level)}, modifier={level_modifier}")
     system_parts = [base_prompt]
 
     # 2. Ajouter la mémoire

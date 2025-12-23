@@ -106,6 +106,15 @@ from services.emotional_peaks import (
 )
 from services.story_arcs import get_story_context
 
+# V7: Transition system
+from services.levels import (
+    ConversationLevel, EmotionalState, TransitionManager,
+    detect_level, detect_climax
+)
+from services.db import (
+    get_transition_state, update_transition_state, start_cooldown
+)
+
 # V6: LLM Router + Conversion
 from services.llm_router import get_llm_config, detect_engagement_signal
 from services import conversion
@@ -340,6 +349,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     logger.info(f"User {user_id}: Day={day_count}, Mood={mood}, Jokes={len(existing_jokes)}")
 
+    # V7: Get transition state and detect level
+    transition_state = await get_transition_state(user_id)
+    detected_level, detected_emotion = detect_level(user_text)
+
+    # V7: Decide transition
+    target_level, transition_reason, level_modifier = TransitionManager.decide_transition(
+        current_level=transition_state["current_level"],
+        detected_level=detected_level,
+        emotional_state=detected_emotion,
+        day_count=day_count,
+        messages_this_session=transition_state["messages_this_session"],
+        cooldown_remaining=transition_state["cooldown_remaining"],
+        messages_since_level_change=transition_state["messages_since_level_change"]
+    )
+
+    logger.info(f"V7 Transition: detected={detected_level.name}, target={target_level.name}, reason={transition_reason}")
+
     # 11. Progress emotional state if user responded
     if emotional_state == "opener":
         await set_emotional_state(user_id, "follow_up")
@@ -427,7 +453,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             user_text, history, memory, phase, day_count, mood, emotional_state,
             extra_instructions="\n".join(extra_instructions) if extra_instructions else None,
             provider=provider,
-            model_override=model
+            model_override=model,
+            level=int(target_level),
+            level_modifier=level_modifier
         )
         metrics.record_llm_call(success=True)
     except Exception as e:
@@ -467,6 +495,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await save_message(user_id, "assistant", response)
 
     logger.info(f"[Luna] {response}")
+
+    # V7: Update transition state
+    level_changed = int(target_level) != transition_state["current_level"]
+    await update_transition_state(
+        user_id=user_id,
+        current_level=int(target_level),
+        messages_this_session=transition_state["messages_this_session"] + 1,
+        messages_since_level_change=0 if level_changed else transition_state["messages_since_level_change"] + 1,
+        cooldown_remaining=max(0, transition_state["cooldown_remaining"] - 1)
+    )
+
+    # V7: Check for climax and start cooldown
+    if target_level == ConversationLevel.NSFW and detect_climax(response):
+        await start_cooldown(user_id, TransitionManager.COOLDOWN_MESSAGES)
+        logger.info(f"V7: Climax detected, starting {TransitionManager.COOLDOWN_MESSAGES} messages cooldown")
 
     # 16. Extraction mémoire périodique
     if msg_count % MEMORY_EXTRACTION_INTERVAL == 0:
