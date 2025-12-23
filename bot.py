@@ -9,7 +9,7 @@ from collections import defaultdict
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-from settings import TELEGRAM_BOT_TOKEN, BOT_VERSION
+from settings import TELEGRAM_BOT_TOKEN, BOT_VERSION, ADMIN_TELEGRAM_ID
 
 
 # ============== MEDIUM FIX: Structured JSON logging ==============
@@ -261,6 +261,210 @@ def write_health_file():
             f.write(str(datetime.now().timestamp()))
     except Exception:
         pass
+
+
+# ============== ADMIN: Debug & Reset ==============
+
+async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handler /debug - affiche l'état interne d'un user (admin only)."""
+    if update.effective_user.id != ADMIN_TELEGRAM_ID:
+        return
+
+    # Parse target user (self or specified)
+    args = context.args
+    if args and args[0].isdigit():
+        target_telegram_id = int(args[0])
+    else:
+        target_telegram_id = update.effective_user.id
+
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            user = await conn.fetchrow(
+                "SELECT * FROM users WHERE telegram_id = $1", target_telegram_id
+            )
+
+        if not user:
+            await update.message.reply_text(f"❌ User {target_telegram_id} non trouvé")
+            return
+
+        # Calculate day_count
+        first_msg = user.get("first_message_at")
+        if first_msg:
+            from settings import PARIS_TZ
+            now = datetime.now(PARIS_TZ)
+            day_count = (now.date() - first_msg.date()).days + 1
+        else:
+            day_count = 1
+
+        # Format memory
+        memory = user.get("memory", {})
+        if isinstance(memory, str):
+            import json
+            memory = json.loads(memory) if memory else {}
+
+        memory_str = ", ".join(f"{k}: {v}" for k, v in memory.items() if v) or "vide"
+
+        debug_msg = f"""🔍 **Debug User {target_telegram_id}**
+
+📊 **État Général**
+• Messages: {user.get('total_messages', 0)}
+• Jour: J{day_count}
+• Phase: {user.get('phase', 'discovery')}
+• Subscription: {user.get('subscription_status', 'trial')}
+
+🎭 **Transitions (V7)**
+• Niveau actuel: {user.get('current_level', 1)} (1=SFW, 2=TENSION, 3=NSFW)
+• Cooldown restant: {user.get('cooldown_remaining', 0)} msgs
+• Msgs cette session: {user.get('messages_this_session', 0)}
+• Msgs depuis changement: {user.get('messages_since_level_change', 0)}
+
+💕 **Engagement**
+• Teasing stage: {user.get('teasing_stage', 0)}/8
+• Emotional state: {user.get('emotional_state') or 'None'}
+• Attachment score: {user.get('attachment_score', 0):.1f}/100
+• Premium previews: {user.get('premium_preview_count', 0)}
+
+🧠 **Mémoire**
+{memory_str[:200]}
+
+⏰ **Timestamps**
+• First msg: {user.get('first_message_at')}
+• Last active: {user.get('last_active')}
+• Paywall sent: {user.get('paywall_sent', False)}
+"""
+        await update.message.reply_text(debug_msg, parse_mode="Markdown")
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ Erreur: {e}")
+
+
+async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handler /reset - reset l'état d'un user pour tests (admin only).
+
+    Usage:
+        /reset              - Reset complet (comme nouveau user)
+        /reset day 3        - Set à jour 3
+        /reset level 2      - Set niveau TENSION
+        /reset teasing 5    - Set teasing stage
+        /reset paywall      - Reset paywall
+        /reset all          - Full reset (supprime user)
+    """
+    if update.effective_user.id != ADMIN_TELEGRAM_ID:
+        return
+
+    args = context.args
+    target_telegram_id = update.effective_user.id  # Default: self
+
+    # Check if first arg is a telegram_id
+    if args and args[0].isdigit() and len(args[0]) > 5:
+        target_telegram_id = int(args[0])
+        args = args[1:]  # Remove from args
+
+    try:
+        pool = get_pool()
+
+        if not args:
+            # Reset transition state only
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    UPDATE users SET
+                        current_level = 1,
+                        cooldown_remaining = 0,
+                        messages_this_session = 0,
+                        messages_since_level_change = 0,
+                        emotional_state = NULL
+                    WHERE telegram_id = $1
+                """, target_telegram_id)
+            await update.message.reply_text(f"✅ Reset transitions pour {target_telegram_id}")
+            return
+
+        action = args[0].lower()
+
+        if action == "day" and len(args) > 1:
+            day = int(args[1])
+            from settings import PARIS_TZ
+            from datetime import timedelta
+            new_first_msg = datetime.now(PARIS_TZ) - timedelta(days=day - 1)
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE users SET first_message_at = $1 WHERE telegram_id = $2",
+                    new_first_msg, target_telegram_id
+                )
+            await update.message.reply_text(f"✅ User {target_telegram_id} → Jour {day}")
+
+        elif action == "level" and len(args) > 1:
+            level = int(args[1])
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE users SET current_level = $1, messages_since_level_change = 0 WHERE telegram_id = $2",
+                    level, target_telegram_id
+                )
+            level_names = {1: "SFW", 2: "TENSION", 3: "NSFW"}
+            await update.message.reply_text(f"✅ User {target_telegram_id} → Niveau {level_names.get(level, level)}")
+
+        elif action == "teasing" and len(args) > 1:
+            stage = int(args[1])
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE users SET teasing_stage = $1 WHERE telegram_id = $2",
+                    stage, target_telegram_id
+                )
+            await update.message.reply_text(f"✅ User {target_telegram_id} → Teasing stage {stage}")
+
+        elif action == "paywall":
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    UPDATE users SET
+                        paywall_sent = FALSE,
+                        preparation_sent = FALSE,
+                        conversion_shown_at = NULL,
+                        premium_preview_count = 0
+                    WHERE telegram_id = $1
+                """, target_telegram_id)
+            await update.message.reply_text(f"✅ Reset paywall pour {target_telegram_id}")
+
+        elif action == "all":
+            async with pool.acquire() as conn:
+                # Delete user completely
+                user = await conn.fetchrow(
+                    "SELECT id FROM users WHERE telegram_id = $1", target_telegram_id
+                )
+                if user:
+                    await conn.execute("DELETE FROM conversations_minimal WHERE user_id = $1", user["id"])
+                    await conn.execute("DELETE FROM proactive_log WHERE user_id = $1", user["id"])
+                    await conn.execute("DELETE FROM users WHERE id = $1", user["id"])
+            await update.message.reply_text(f"✅ User {target_telegram_id} supprimé (full reset)")
+
+        elif action == "cooldown":
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE users SET cooldown_remaining = 0 WHERE telegram_id = $1",
+                    target_telegram_id
+                )
+            await update.message.reply_text(f"✅ Cooldown reset pour {target_telegram_id}")
+
+        elif action == "session":
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE users SET messages_this_session = 0 WHERE telegram_id = $1",
+                    target_telegram_id
+                )
+            await update.message.reply_text(f"✅ Session reset pour {target_telegram_id}")
+
+        else:
+            await update.message.reply_text("""❓ Usage:
+/reset - Reset transitions
+/reset day 3 - Set jour 3
+/reset level 2 - Set TENSION
+/reset teasing 5 - Set teasing
+/reset paywall - Reset paywall
+/reset cooldown - Reset cooldown
+/reset session - Reset session msgs
+/reset all - Supprimer user""")
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ Erreur: {e}")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -743,7 +947,9 @@ def main() -> None:
 
     # Handlers
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("health", health_check))  # HIGH FIX: health check
+    app.add_handler(CommandHandler("health", health_check))
+    app.add_handler(CommandHandler("debug", debug_command))   # Admin: état interne
+    app.add_handler(CommandHandler("reset", reset_command))   # Admin: reset user
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Jobs proactifs - toutes les 30 minutes

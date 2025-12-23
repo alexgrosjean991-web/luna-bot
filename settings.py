@@ -44,7 +44,10 @@ PAYMENT_LINK = os.getenv("PAYMENT_LINK", "")
 TRIAL_DAYS = 5
 
 # Bot version
-BOT_VERSION = "1.1.0"  # V6: Multi-LLM + Conversion
+BOT_VERSION = "1.2.0"  # V7: Transitions + Debug
+
+# Admin (pour commandes /debug, /reset)
+ADMIN_TELEGRAM_ID = int(os.getenv("ADMIN_TELEGRAM_ID", "0"))
 
 # DB Pool
 DB_POOL_MIN = 2
