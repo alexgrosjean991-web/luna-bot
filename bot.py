@@ -20,12 +20,18 @@ from services.availability import send_with_natural_delay
 from services.relationship import get_relationship_phase, get_phase_instructions
 from services.subscription import (
     is_trial_expired, get_paywall_message, get_post_paywall_response,
-    mark_paywall_sent, has_paywall_been_sent
+    mark_paywall_sent, has_paywall_been_sent,
+    should_send_preparation, get_preparation_message,
+    mark_preparation_sent, has_preparation_been_sent
 )
-from services.teasing import check_teasing_opportunity
+from services.teasing import check_teasing_opportunity, get_teasing_instruction
 from services.proactive import (
     get_message_type_for_time, should_send, get_random_message, MAX_PROACTIVE_PER_DAY
 )
+from services.emotional_peaks import (
+    should_trigger_emotional_peak, get_emotional_opener, EMOTIONAL_STATES
+)
+from services.story_arcs import get_story_context
 
 # Logging
 logging.basicConfig(
@@ -40,6 +46,10 @@ MEMORY_EXTRACTION_INTERVAL = 5
 # Rate limiting
 RATE_LIMIT_SECONDS = 1.0
 user_last_message: dict[int, float] = defaultdict(float)
+
+# Emotional peak state tracker (in-memory, reset on restart)
+# States: None, "opener", "follow_up", "resolution", "done"
+user_emotional_state: dict[int, str | None] = defaultdict(lambda: None)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -114,47 +124,67 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # 9. Déterminer mood
     mood = get_current_mood()
 
-    logger.info(f"User {user_id}: Phase={phase}, Day={day_count}, Mood={mood}")
+    # 10. Get current emotional state
+    emotional_state = user_emotional_state[user_id]
 
-    # 10. Check teasing opportunity (J4-5)
+    logger.info(f"User {user_id}: Phase={phase}, Day={day_count}, Mood={mood}, EmotionalState={emotional_state}")
+
+    # 11. Progress emotional state if user responded
+    if emotional_state == "opener":
+        user_emotional_state[user_id] = "follow_up"
+        emotional_state = "follow_up"
+    elif emotional_state == "follow_up":
+        user_emotional_state[user_id] = "resolution"
+        emotional_state = "resolution"
+    elif emotional_state == "resolution":
+        user_emotional_state[user_id] = "done"
+        emotional_state = None  # Don't pass to LLM, peak is over
+
+    # 12. Check teasing opportunity (J2-5)
     teasing_msg = None
-    if 4 <= day_count <= 5:
+    if 2 <= day_count <= 5:
         teasing_msg = check_teasing_opportunity(day_count, user_data)
         if teasing_msg:
             await update_teasing_stage(user_id, user_data.get("teasing_stage", 0) + 1)
 
-    # 11. Générer réponse
+    # 13. Générer réponse
     response = await generate_response(
-        user_text, history, memory, phase, day_count, mood
+        user_text, history, memory, phase, day_count, mood, emotional_state
     )
 
-    # 12. Ajouter teasing si opportun
+    # 14. Ajouter teasing si opportun
     if teasing_msg:
         response = response + "\n\n" + teasing_msg
 
-    # 13. Sauvegarder réponse Luna
+    # 15. Sauvegarder réponse Luna
     await save_message(user_id, "assistant", response)
 
     logger.info(f"[Luna] {response}")
 
-    # 14. Extraction mémoire périodique
+    # 16. Extraction mémoire périodique
     if msg_count % MEMORY_EXTRACTION_INTERVAL == 0:
         logger.info(f"Extraction mémoire pour user {user_id} (msg #{msg_count})")
         updated_history = await get_history(user_id, limit=10)
         new_memory = await extract_memory(updated_history, memory)
         await update_user_memory(user_id, new_memory)
 
-    # 15. Envoyer avec délai naturel
+    # 17. Envoyer avec délai naturel
     await send_with_natural_delay(update, response, mood)
 
 
 async def send_proactive_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Job qui envoie les messages proactifs par phase."""
+    """Job qui envoie les messages proactifs par phase avec emotional peaks."""
+    from datetime import datetime
+    from settings import PARIS_TZ
+
     users = await get_users_for_proactive(inactive_hours=0)
+    now = datetime.now(PARIS_TZ)
+    current_hour = now.hour
 
     for user in users:
         try:
             user_id = user["id"]
+            telegram_id = user["telegram_id"]
 
             # Vérifier quota journalier
             count = await count_proactive_today(user_id)
@@ -170,25 +200,52 @@ async def send_proactive_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
             if first_message_at and is_trial_expired(first_message_at):
                 continue
 
-            # Check type de message pour cette heure
-            msg_type = get_message_type_for_time(phase)
-            if not msg_type:
+            message = None
+            msg_type = "proactive"
+
+            # 1. Check J5 preparation message (soir J5)
+            if first_message_at and should_send_preparation(first_message_at):
+                prep_sent = await has_preparation_been_sent(user_id, pool)
+                if not prep_sent:
+                    message = get_preparation_message()
+                    msg_type = "preparation"
+                    await mark_preparation_sent(user_id, pool)
+                    logger.info(f"Preparation message sent to user {user_id}")
+
+            # 2. Check emotional peak trigger (J3-5, specific hours)
+            if not message and day_count in [3, 4, 5]:
+                # Don't trigger if already in emotional state
+                if user_emotional_state[user_id] is None:
+                    if should_trigger_emotional_peak(day_count, current_hour):
+                        message = get_emotional_opener(day_count)
+                        msg_type = "emotional_peak"
+                        user_emotional_state[user_id] = "opener"
+                        logger.info(f"Emotional peak triggered for user {user_id} (day {day_count})")
+
+            # 3. Regular proactive message
+            if not message:
+                # Check type de message pour cette heure
+                msg_type = get_message_type_for_time(phase)
+                if not msg_type:
+                    continue
+
+                # Check probabilité
+                if not should_send(msg_type, phase):
+                    continue
+
+                # Générer le message
+                memory = user.get("memory", {})
+                if isinstance(memory, str):
+                    memory = json.loads(memory)
+
+                message = get_random_message(msg_type, memory, phase)
+
+            if not message:
                 continue
-
-            # Check probabilité
-            if not should_send(msg_type, phase):
-                continue
-
-            # Générer le message
-            memory = user.get("memory", {})
-            if isinstance(memory, str):
-                memory = json.loads(memory)
-
-            message = get_random_message(msg_type, memory, phase)
 
             # Envoyer
             await context.bot.send_message(
-                chat_id=user["telegram_id"],
+                chat_id=telegram_id,
                 text=message
             )
 

@@ -140,3 +140,44 @@ def format_memory_for_prompt(memory: dict) -> str:
         parts.append(f"Humeur: {memory['mood_recent']}")
 
     return ". ".join(parts) + "." if parts else "Tu ne sais encore rien sur lui."
+
+
+def get_memory_recall_instruction(memory: dict) -> str:
+    """Génère une instruction pour rappeler activement un élément de mémoire."""
+    import random
+
+    if not memory:
+        return ""
+
+    recall_options = []
+
+    if memory.get("prenom"):
+        recall_options.append(f"Utilise son prénom ({memory['prenom']}) naturellement dans ta réponse")
+
+    if memory.get("travail"):
+        recall_options.append(f"Tu peux lui demander des nouvelles de son travail ({memory['travail']})")
+
+    if memory.get("hobbies") and len(memory["hobbies"]) > 0:
+        hobby = random.choice(memory["hobbies"])
+        recall_options.append(f"Tu peux faire référence à son hobby: {hobby}")
+
+    if memory.get("problemes") and len(memory["problemes"]) > 0:
+        prob = random.choice(memory["problemes"])
+        recall_options.append(f"Tu peux lui demander si ça va mieux concernant: {prob}")
+
+    if memory.get("facts") and len(memory["facts"]) > 0:
+        fact = random.choice(memory["facts"])
+        recall_options.append(f"Tu peux mentionner ce que tu sais de lui: {fact}")
+
+    if not recall_options:
+        return ""
+
+    # 40% de chance de forcer un rappel
+    if random.random() > 0.40:
+        return ""
+
+    instruction = random.choice(recall_options)
+    return f"""
+## RAPPEL MÉMOIRE (utilise naturellement)
+{instruction}
+"""

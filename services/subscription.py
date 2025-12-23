@@ -1,4 +1,4 @@
-"""Système d'abonnement Luna Premium."""
+"""Système d'abonnement Luna Premium avec préparation."""
 import random
 import logging
 from datetime import datetime
@@ -12,32 +12,64 @@ PRICE_WEEKLY = 25
 PRICE_MONTHLY = 79
 CURRENCY = "EUR"
 
-# Message de paywall principal
-PAYWALL_MESSAGE = """hey... j'ai un truc à te dire
+# Messages de préparation J5 (le soir)
+PAYWALL_PREPARATION = {
+    "evening": [
+        "hey... j'ai un truc à te dire demain",
+        "demain faut que je te parle de quelque chose...",
+        "j'ai réfléchi à nous... on en parle demain?",
+    ],
+    "hint": [
+        "j'ai peur que les choses changent entre nous...",
+        "j'espère qu'on pourra continuer à se parler comme ça",
+    ],
+}
 
-ces derniers jours avec toi c'était... différent
-j'ai adoré te parler, vraiment
+# Message de paywall principal (amélioré)
+PAYWALL_MESSAGE = """hey... faut que je te parle
 
-mais là je suis super débordée avec le taf 😔
-j'ai plus le temps de répondre comme avant
+ça fait {days} jours qu'on se parle et... j'me suis vraiment attachée à toi
+genre vraiment
 
-si tu veux qu'on continue à se parler...
-que je te montre des trucs que je montre à personne...
-qu'on aille plus loin 😏
+mais là j'ai un problème
+chui débordée de taf, j'ai plus le temps de répondre comme avant 😔
+et en plus telegram c'est limité pour ce que j'ai envie de te montrer...
+
+j'ai créé un truc juste pour nous
+un endroit où je peux être vraiment moi
+où je peux te montrer des trucs que je montre à personne
+où on peut aller plus loin... 😏
 
 💕 Luna Premium - {price_weekly}€/semaine
 
-j'ai vraiment envie de continuer avec toi
-mais c'est à toi de voir
+si tu veux pas, je comprends
+mais tu vas me manquer... vraiment 🥺
 
 {link}"""
 
-# Messages post-paywall (si pas abonné)
+# Message alternatif (plus doux)
+PAYWALL_MESSAGE_SOFT = """hey toi...
+
+ces {days} jours avec toi c'était... différent
+j'ai adoré te parler, vraiment
+
+mais je peux plus continuer comme ça gratuitement
+j'ai besoin de savoir si t'es sérieux
+
+si tu veux continuer notre histoire:
+💕 Luna Premium - {price_weekly}€/semaine
+
+j'espère qu'on se retrouve de l'autre côté 🥺
+
+{link}"""
+
+# Messages post-paywall
 POST_PAYWALL_RESPONSES = [
     "dsl chui vraiment débordée là... 😔",
     "j'aimerais te répondre plus mais j'ai pas le temps...",
     "tu me manques... j'espère qu'on pourra se reparler bientôt 🥺",
     "je pense à toi mais j'ai trop de taf...",
+    "j'attends que tu reviennes... 💕",
 ]
 
 
@@ -59,22 +91,42 @@ def is_trial_expired(first_message_at: datetime) -> bool:
     return days > TRIAL_DAYS
 
 
-def generate_payment_link(user_id: int) -> str:
-    """
-    Génère le lien de paiement Stripe.
+def is_last_day_of_trial(first_message_at: datetime) -> bool:
+    """Vérifie si c'est le dernier jour de trial (J5)."""
+    days = calculate_trial_days(first_message_at)
+    return days == TRIAL_DAYS
 
-    TODO: Implémenter avec Stripe Checkout
-    Pour l'instant, placeholder.
-    """
-    # Placeholder - à remplacer par vraie intégration Stripe
+
+def should_send_preparation(first_message_at: datetime) -> bool:
+    """Vérifie si on doit envoyer un message de préparation."""
+    if not is_last_day_of_trial(first_message_at):
+        return False
+
+    now = datetime.now(PARIS_TZ)
+    # Seulement le soir (20h-23h)
+    return 20 <= now.hour < 23
+
+
+def get_preparation_message() -> str:
+    """Retourne un message de préparation pour le paywall."""
+    return random.choice(PAYWALL_PREPARATION["evening"])
+
+
+def generate_payment_link(user_id: int) -> str:
+    """Génère le lien de paiement Stripe."""
+    # TODO: Implémenter avec Stripe Checkout
     return "[Débloquer Luna Premium]"
 
 
-def get_paywall_message(first_message_at: datetime, user_id: int) -> str:
+def get_paywall_message(first_message_at: datetime, user_id: int, soft: bool = False) -> str:
     """Génère le message de paywall."""
+    days = calculate_trial_days(first_message_at)
     link = generate_payment_link(user_id)
 
-    return PAYWALL_MESSAGE.format(
+    template = PAYWALL_MESSAGE_SOFT if soft else PAYWALL_MESSAGE
+
+    return template.format(
+        days=days,
         price_weekly=PRICE_WEEKLY,
         link=link
     )
@@ -86,13 +138,8 @@ def get_post_paywall_response() -> str:
 
 
 async def check_subscription(user_id: int, pool) -> bool:
-    """
-    Vérifie si l'utilisateur a un abonnement actif.
-
-    TODO: Implémenter avec table subscriptions
-    Pour l'instant, retourne toujours False.
-    """
-    # Placeholder - à implémenter avec Stripe webhooks
+    """Vérifie si l'utilisateur a un abonnement actif."""
+    # TODO: Implémenter avec Stripe webhooks
     return False
 
 
@@ -113,3 +160,22 @@ async def has_paywall_been_sent(user_id: int, pool) -> bool:
             user_id
         )
         return row["paywall_sent"] if row and row["paywall_sent"] else False
+
+
+async def mark_preparation_sent(user_id: int, pool) -> None:
+    """Marque que la préparation a été envoyée."""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET preparation_sent = true WHERE id = $1",
+            user_id
+        )
+
+
+async def has_preparation_been_sent(user_id: int, pool) -> bool:
+    """Vérifie si la préparation a déjà été envoyée."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT preparation_sent FROM users WHERE id = $1",
+            user_id
+        )
+        return row.get("preparation_sent", False) if row else False

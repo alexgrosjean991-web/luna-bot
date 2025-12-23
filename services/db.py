@@ -95,6 +95,12 @@ async def init_db() -> None:
             teasing_stage INTEGER DEFAULT 0
         """)
 
+        # Colonne pour préparation paywall (J5)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            preparation_sent BOOLEAN DEFAULT FALSE
+        """)
+
     logger.info("DB connectée")
 
 

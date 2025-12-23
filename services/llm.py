@@ -1,11 +1,14 @@
-"""Client LLM (Anthropic Claude) avec contexte mood/phase."""
+"""Client LLM (Anthropic Claude) avec contexte mood/phase/story/peaks."""
 import logging
 import httpx
 from pathlib import Path
 from settings import ANTHROPIC_API_KEY, LLM_MODEL, MAX_TOKENS
-from services.memory import format_memory_for_prompt
+from services.memory import format_memory_for_prompt, get_memory_recall_instruction
 from services.relationship import get_phase_instructions, get_phase_temperature
 from services.mood import get_mood_instructions, get_mood_context
+from services.story_arcs import get_story_instruction
+from services.teasing import get_teasing_instruction
+from services.emotional_peaks import get_emotional_instruction
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +23,8 @@ async def generate_response(
     memory: dict | None = None,
     phase: str = "discovery",
     day_count: int = 1,
-    mood: str = "chill"
+    mood: str = "chill",
+    emotional_state: str | None = None
 ) -> str:
     """
     Génère une réponse Luna avec contexte complet.
@@ -32,6 +36,7 @@ async def generate_response(
         phase: Phase de la relation (discovery, connection, close)
         day_count: Numéro du jour
         mood: Humeur actuelle (happy, chill, playful, flirty, tired, busy, emotional)
+        emotional_state: État émotionnel si pic en cours (opener, follow_up, resolution)
 
     Returns:
         Réponse de Luna
@@ -44,6 +49,11 @@ async def generate_response(
         memory_text = format_memory_for_prompt(memory)
         system_parts.append(f"\n## CE QUE TU SAIS SUR LUI:\n{memory_text}")
 
+        # 2b. Rappel mémoire actif (40% chance)
+        memory_recall = get_memory_recall_instruction(memory)
+        if memory_recall:
+            system_parts.append(memory_recall)
+
     # 3. Ajouter les instructions de phase
     phase_instructions = get_phase_instructions(phase, day_count)
     system_parts.append(phase_instructions)
@@ -52,6 +62,22 @@ async def generate_response(
     mood_instructions = get_mood_instructions(mood)
     mood_context = get_mood_context(mood)
     system_parts.append(f"\n## TON HUMEUR ACTUELLE:\n{mood_instructions}\nContexte: {mood_context}")
+
+    # 5. Ajouter story arc (contexte de vie)
+    story_instruction = get_story_instruction(day_count)
+    if story_instruction:
+        system_parts.append(story_instruction)
+
+    # 6. Ajouter teasing instruction (J2-5)
+    teasing_instruction = get_teasing_instruction(day_count)
+    if teasing_instruction:
+        system_parts.append(teasing_instruction)
+
+    # 7. Ajouter emotional peak instruction (si en cours)
+    if emotional_state:
+        emotional_instruction = get_emotional_instruction(day_count, emotional_state)
+        if emotional_instruction:
+            system_parts.append(emotional_instruction)
 
     system_prompt = "\n".join(system_parts)
 
