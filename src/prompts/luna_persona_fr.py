@@ -444,6 +444,7 @@ def _get_life_context_fr(hour: int, day_of_week: int, user_id: int) -> str:
     Luna a une VIE - elle ne fait pas que répondre.
     """
     import random
+    from datetime import datetime
 
     # Seed basée sur le jour pour cohérence intra-journée
     daily_seed = (datetime.now().toordinal() + user_id) % 1000
@@ -613,6 +614,7 @@ def _get_daily_mood_variation_fr(user_id: int) -> str:
     Variation d'humeur journalière - certains jours Luna est plus down/up
     """
     import random
+    from datetime import datetime
     day_seed = (datetime.now().toordinal() + user_id) % 100
 
     if day_seed < 10:  # 10% des jours
