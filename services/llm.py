@@ -46,8 +46,8 @@ async def call_openrouter(
     messages: list[dict],
     system_prompt: str,
     model: str = "anthracite-org/magnum-v4-72b",
-    max_tokens: int = 60,
-    temperature: float = 0.75
+    max_tokens: int = 100,
+    temperature: float = 0.8
 ) -> str:
     """
     Appelle l'API OpenRouter pour les modèles premium.
@@ -76,6 +76,8 @@ async def call_openrouter(
         "messages": formatted_messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
+        "frequency_penalty": 0.3,  # Évite répétitions
+        "presence_penalty": 0.2,   # Encourage nouveauté
     }
 
     # Debug: log ce qu'on envoie
@@ -221,7 +223,7 @@ async def generate_response(
             system_prompt=system_prompt,
             model=model,
             max_tokens=MAX_TOKENS_PREMIUM,
-            temperature=0.75
+            temperature=0.8
         )
 
     # ============== Anthropic (default) ==============
