@@ -255,6 +255,10 @@ class ResponseFilter:
     def _clean_artifacts(cls, response: str) -> str:
         """Nettoie les artifacts courants des LLM"""
 
+        # === SUPPRIMER LES CARACTÈRES NON-LATINS (russe, chinois, etc.) ===
+        # Garde: Latin, accents français, emojis, ponctuation
+        response = re.sub(r'[а-яА-ЯёЁ\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]+', '', response)
+
         # === SUPPRIMER TOUS LES ASTÉRISQUES ===
         # Luna n'utilise JAMAIS d'astérisques (ni pour actions ni pour emphase)
         response = response.replace('*', '')
