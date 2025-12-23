@@ -67,10 +67,15 @@ class ResponseFilter:
         "tu voudrais faire quoi",
         "tu veux faire quoi",
         "qu'est-ce que tu aimerais sentir",
-        "keske tu aimerais",  # typo common
+        "keske tu aimerais",
         "keske tu voudrais",
         "dis-moi ce qui te ferait",
         "dis moi ce qui te ferait",
+        "est-ce que c'est ce que tu voulais",
+        "c'est ce que tu voulais",
+        "tu veux que je",
+        "tu ne crois pas",
+        "tu ne penses pas",
     ]
 
     # Fallbacks naturels
@@ -253,6 +258,21 @@ class ResponseFilter:
         # === SUPPRIMER TOUS LES ASTÉRISQUES ===
         # Luna n'utilise JAMAIS d'astérisques (ni pour actions ni pour emphase)
         response = response.replace('*', '')
+
+        # === SUPPRIMER LES HALLUCINATIONS/GIBBERISH EN FIN DE MESSAGE ===
+        # Pattern: texte random après un emoji ou ponctuation finale
+        # Ex: "mmh... 😏 dire ouais c etou vas" -> "mmh... 😏"
+        gibberish_patterns = [
+            r'\s+dire\s+\w+.*$',  # "dire ouais, c etou..."
+            r'\s+c\s+etou.*$',
+            r'\s+trop\s+liter.*$',
+            r'\s+tu\s+peux\s+optimis.*$',
+            r'\s+wtf.*$',
+            r'\s+\[.*\].*$',  # "[something]"
+            r'\s+At\s+\d{4}-.*$',  # "At 0000-00-00..."
+        ]
+        for pattern in gibberish_patterns:
+            response = re.sub(pattern, '', response, flags=re.IGNORECASE)
 
         # Supprimer les espaces multiples
         response = re.sub(r' +', ' ', response)
