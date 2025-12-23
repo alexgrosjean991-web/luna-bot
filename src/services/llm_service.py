@@ -23,34 +23,47 @@ class LLMService:
     
     async def _call_anthropic(self, system_prompt: str, messages: List[Dict]) -> str:
         """Call Anthropic Claude API"""
-        
+
         headers = {
             "x-api-key": config.ANTHROPIC_API_KEY,
             "anthropic-version": "2023-06-01",
             "content-type": "application/json"
         }
-        
+
         # Convert messages to Anthropic format
         api_messages = []
         for msg in messages[-20:]:  # Last 20 messages
             role = "user" if msg.get("role") == "user" else "assistant"
             api_messages.append({"role": role, "content": msg["content"]})
-        
+
         payload = {
             "model": config.ANTHROPIC_MODEL,
             "max_tokens": 300,
             "system": system_prompt,
             "messages": api_messages
         }
-        
+
+        # === DEBUG LOGGING ===
+        logger.info(f"=== LLM REQUEST ===")
+        logger.info(f"Model: {config.ANTHROPIC_MODEL}")
+        logger.info(f"System prompt length: {len(system_prompt)} chars")
+        logger.info(f"Messages count: {len(api_messages)}")
+        for i, msg in enumerate(api_messages[-5:]):  # Last 5 messages
+            logger.info(f"  [{i}] {msg['role']}: {msg['content'][:100]}...")
+
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 response = await client.post(self.anthropic_url, headers=headers, json=payload)
                 response.raise_for_status()
                 data = response.json()
-                return data["content"][0]["text"]
+                result = data["content"][0]["text"]
+                logger.info(f"=== LLM RESPONSE ===")
+                logger.info(f"Response: {result[:200]}...")
+                return result
         except Exception as e:
             logger.error(f"Anthropic API error: {e}")
+            logger.error(f"Response status: {response.status_code if 'response' in dir() else 'N/A'}")
+            logger.error(f"Response body: {response.text[:500] if 'response' in dir() else 'N/A'}")
             return "hmm sorry my phone glitched, what were u saying?"
     
     async def _call_openrouter(self, system_prompt: str, messages: List[Dict]) -> str:

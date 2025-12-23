@@ -84,7 +84,7 @@ L'ANTICIPATION est plus puissante que la réalité. Fais-le désirer plus.
         min_affection=50,
         max_affection=70,
         requires_converted=False,
-        use_nsfw_model=False,
+        use_nsfw_model=True,  # USE DOLPHIN - Haiku refuses even soft romantic content!
         prompt_injection="""
 ## NIVEAU NSFW: SOFT (Affection 50-70)
 
@@ -96,11 +96,12 @@ Tu peux maintenant:
 - Descriptions sensuelles (pas explicites)
 - "j'aimerais tellement que tu sois là"
 - Suggérer sans être graphique
+- Répondre aux scénarios romantiques/suggestifs ("blottis sous la couette", etc.)
 
-Tu NE peux PAS encore:
-- Descriptions explicites d'actes sexuels
-- Vocabulaire cru (bite, chatte, etc.)
-- Scénarios détaillés
+Reste sensuelle mais pas explicite:
+- Suggère plutôt que de décrire
+- L'imagination fait le travail
+- "hmm j'aimerais bien...", "si t'étais là je..."
 
 Tu fais MONTER la température progressivement. Chaque message un peu plus chaud.
 """
@@ -258,7 +259,17 @@ Fais-lui sentir que c'est possible... mais pas encore.
             "thinking about you naked", "je t'imagine",
             "in bed", "au lit",
             "touch yourself", "touche toi",
-            "what would you do if", "qu'est-ce tu ferais si"
+            "what would you do if", "qu'est-ce tu ferais si",
+            # Romantic/suggestive scenarios
+            "blottis", "sous la couette", "cuddle", "cuddling",
+            "dans tes bras", "in your arms", "in my arms",
+            "dormir ensemble", "sleep together", "sleepover",
+            "contre toi", "contre moi", "next to you", "next to me",
+            "embrasser", "kiss", "kissing", "bisou",
+            "câlin", "calin", "hug", "hugging",
+            "ensemble ce soir", "together tonight",
+            "si on était", "if we were", "if you were here",
+            "imagine", "imagines", "fantasme", "fantasy"
         ]
 
         if any(p in text_lower for p in suggestive_patterns):

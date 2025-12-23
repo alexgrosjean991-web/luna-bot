@@ -353,12 +353,18 @@ It's been a few hours since you talked. You can:
         # Get user day and conversion status
         day_number = await ConversionManager.get_user_day(self.db, user_id)
         is_converted = await ConversionManager.is_converted(self.db, user_id)
-        
+
         # Check if should limit messages (post-trial, not converted)
         should_limit, limit_reason = await ConversionManager.should_limit_messages(self.db, user_id)
-        
+
+        # === DEBUG ===
+        logger.info(f"=== USER STATUS ===")
+        logger.info(f"User ID: {user_id}, Day: {day_number}, Converted: {is_converted}")
+        logger.info(f"Should limit: {should_limit}, Reason: {limit_reason}")
+
         if should_limit and not is_converted:
             # Luna is "busy" - respond sparsely
+            logger.warning(f"⚠️ TRIAL LIMIT HIT - User {user_id} blocked, reason: {limit_reason}")
             if random.random() < 0.7:  # 70% chance to respond with busy message
                 busy_messages_en = [
                     "sorry been super busy at work",
