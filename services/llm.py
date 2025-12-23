@@ -227,7 +227,7 @@ async def generate_response(
             system_prompt=system_prompt,
             model=model,
             max_tokens=MAX_TOKENS_PREMIUM,
-            temperature=min(temperature + 0.1, 1.0)  # Légèrement plus créatif
+            temperature=0.75  # Fixe pour cohérence du style Luna
         )
 
     # ============== Anthropic (default) ==============
