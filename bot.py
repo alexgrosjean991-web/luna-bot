@@ -3,7 +3,7 @@ import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-from config import TELEGRAM_BOT_TOKEN
+from settings import TELEGRAM_BOT_TOKEN
 from services.db import init_db, close_db, save_message, get_history
 from services.llm import generate_response
 

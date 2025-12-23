@@ -1,7 +1,7 @@
 """Gestion PostgreSQL."""
 import logging
 import asyncpg
-from config import DB_CONFIG, HISTORY_LIMIT
+from settings import DB_CONFIG, HISTORY_LIMIT
 
 logger = logging.getLogger(__name__)
 

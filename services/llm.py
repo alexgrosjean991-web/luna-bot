@@ -2,7 +2,7 @@
 import logging
 import httpx
 from pathlib import Path
-from config import ANTHROPIC_API_KEY, LLM_MODEL, MAX_TOKENS
+from settings import ANTHROPIC_API_KEY, LLM_MODEL, MAX_TOKENS
 
 logger = logging.getLogger(__name__)
 
