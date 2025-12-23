@@ -3,8 +3,8 @@ LLM Router - Sélectionne le modèle optimal selon le parcours utilisateur.
 
 Routes:
     - J1-J4: Haiku (construction engagement)
-    - J5 20h+ avec teasing >= 5: Venice (aperçu premium)
-    - J6+ abonné: Venice (premium complet)
+    - J5 20h+ avec teasing >= 5: Mixtral (aperçu premium)
+    - J6+ abonné: Mixtral (premium complet)
 """
 
 from datetime import datetime
@@ -42,22 +42,22 @@ def get_llm_config(
 
     # Abonnés = toujours premium
     if subscription_status == "active":
-        logger.info(f"Router: Venice (abonné actif)")
-        return ("venice", "venice-uncensored")
+        logger.info(f"Router: Mixtral (abonné actif)")
+        return ("openrouter", "mistralai/mixtral-8x22b-instruct")
 
     # J5 soir + engagement élevé = aperçu premium
     if day_count == 5:
         if hour >= 20 and teasing_stage >= 5:
-            logger.info(f"Router: Venice (J5 soir, teasing={teasing_stage})")
-            return ("venice", "venice-uncensored")
+            logger.info(f"Router: Mixtral (J5 soir, teasing={teasing_stage})")
+            return ("openrouter", "mistralai/mixtral-8x22b-instruct")
         if teasing_stage >= 6:
-            logger.info(f"Router: Venice (J5, high teasing={teasing_stage})")
-            return ("venice", "venice-uncensored")
+            logger.info(f"Router: Mixtral (J5, high teasing={teasing_stage})")
+            return ("openrouter", "mistralai/mixtral-8x22b-instruct")
 
     # J6+ non abonné mais très engagé = aperçu limité
     if day_count >= 6 and teasing_stage >= 7:
-        logger.info(f"Router: Venice (J{day_count}, very high teasing)")
-        return ("venice", "venice-uncensored")
+        logger.info(f"Router: Mixtral (J{day_count}, very high teasing)")
+        return ("openrouter", "mistralai/mixtral-8x22b-instruct")
 
     # Default: Haiku
     logger.info(f"Router: Haiku (J{day_count}, teasing={teasing_stage})")
@@ -98,5 +98,5 @@ def detect_engagement_signal(message: str) -> int:
 
 
 def is_premium_session(provider: str) -> bool:
-    """Vérifie si on est en session premium (Venice)."""
-    return provider == "venice"
+    """Vérifie si on est en session premium (OpenRouter)."""
+    return provider == "openrouter"
