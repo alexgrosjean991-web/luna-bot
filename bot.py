@@ -1,4 +1,4 @@
-"""Luna Bot - Entry Point (Modular)."""
+"""Luna Bot - Entry Point avec systèmes mood/relationship/subscription."""
 import json
 import logging
 import time
@@ -10,12 +10,14 @@ from settings import TELEGRAM_BOT_TOKEN
 from services.db import (
     init_db, close_db, save_message, get_history,
     get_or_create_user, get_user_memory, update_user_memory, increment_message_count,
-    update_last_active, get_users_for_proactive, count_proactive_today, log_proactive,
-    get_user_phase
+    update_last_active, get_users_for_proactive, count_proactive_today, log_proactive
 )
 from services.llm import generate_response
 from services.memory import extract_memory
-from services.humanizer import send_with_delay
+from services.mood import get_current_mood, get_mood_instructions, get_mood_context
+from services.availability import send_with_natural_delay
+from services.relationship import get_relationship_phase, get_phase_instructions
+from services.subscription import is_trial_expired, get_paywall_message, get_paywall_reminder
 from services.proactive import (
     get_message_type_for_time, should_send, get_random_message, MAX_PROACTIVE_PER_DAY
 )
@@ -37,11 +39,14 @@ user_last_message: dict[int, float] = defaultdict(float)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handler /start."""
-    await update.message.reply_text("hey 😊")
+    user = await get_or_create_user(update.effective_user.id)
+    welcome = "hey 😊 t'es qui toi?"
+    await save_message(user["id"], "assistant", welcome)
+    await update.message.reply_text(welcome)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handler messages texte avec extraction mémoire."""
+    """Handler principal avec mood, relationship et subscription."""
     tg_user = update.effective_user
     telegram_id = tg_user.id
     user_text = update.message.text
@@ -68,33 +73,54 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # 3. Sauvegarder message user
     await save_message(user_id, "user", user_text)
 
-    # 3. Incrémenter compteur
+    # 4. Incrémenter compteur
     msg_count = await increment_message_count(user_id)
 
-    # 4. Récupérer historique + mémoire + phase
+    # 5. Récupérer first_message_at pour phase/subscription
+    from services.db import pool
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT first_message_at FROM users WHERE id = $1", user_id
+        )
+        first_message_at = row["first_message_at"] if row else None
+
+    # 6. Vérifier subscription (paywall après 5 jours)
+    if first_message_at and is_trial_expired(first_message_at):
+        paywall_msg = get_paywall_message(first_message_at, user_id)
+        await update.message.reply_text(paywall_msg)
+        await save_message(user_id, "assistant", paywall_msg)
+        logger.info(f"Paywall affiché pour user {user_id}")
+        return
+
+    # 7. Récupérer historique + mémoire
     history = await get_history(user_id)
     memory = await get_user_memory(user_id)
-    phase, day_count = await get_user_phase(user_id)
 
-    logger.info(f"User {user_id}: Phase={phase}, Day={day_count}")
+    # 8. Déterminer phase relation et mood
+    phase, day_count = get_relationship_phase(first_message_at)
+    mood = get_current_mood()
 
-    # 5. Générer réponse avec mémoire et phase
-    response = await generate_response(user_text, history, memory, phase, day_count)
+    logger.info(f"User {user_id}: Phase={phase}, Day={day_count}, Mood={mood}")
 
-    # 6. Sauvegarder réponse Luna
+    # 9. Générer réponse avec contexte complet
+    response = await generate_response(
+        user_text, history, memory, phase, day_count, mood
+    )
+
+    # 10. Sauvegarder réponse Luna
     await save_message(user_id, "assistant", response)
 
     logger.info(f"[Luna] {response}")
 
-    # 7. Extraction mémoire périodique
+    # 11. Extraction mémoire périodique
     if msg_count % MEMORY_EXTRACTION_INTERVAL == 0:
         logger.info(f"Extraction mémoire pour user {user_id} (msg #{msg_count})")
         updated_history = await get_history(user_id, limit=10)
         new_memory = await extract_memory(updated_history, memory)
         await update_user_memory(user_id, new_memory)
 
-    # 9. Envoyer AVEC DÉLAI
-    await send_with_delay(update, response)
+    # 12. Envoyer avec délai naturel
+    await send_with_natural_delay(update, response, mood)
 
 
 async def send_proactive_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -155,7 +181,7 @@ async def post_shutdown(application: Application) -> None:
 
 
 def main() -> None:
-    """Lance le bot avec messages proactifs."""
+    """Lance le bot."""
     logger.info("Démarrage Luna Bot...")
 
     app = (
@@ -174,12 +200,12 @@ def main() -> None:
     job_queue = app.job_queue
     job_queue.run_repeating(
         send_proactive_messages,
-        interval=1800,  # 30 minutes
-        first=60,       # Démarre après 1 minute
+        interval=1800,
+        first=60,
         name="proactive_job"
     )
 
-    logger.info("Luna est en ligne avec messages proactifs!")
+    logger.info("Luna en ligne!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

@@ -1,10 +1,11 @@
-"""Client LLM (Anthropic Claude)."""
+"""Client LLM (Anthropic Claude) avec contexte mood/phase."""
 import logging
 import httpx
 from pathlib import Path
 from settings import ANTHROPIC_API_KEY, LLM_MODEL, MAX_TOKENS
 from services.memory import format_memory_for_prompt
-from services.persona import get_phase_instructions, get_phase_temperature
+from services.relationship import get_phase_instructions, get_phase_temperature
+from services.mood import get_mood_instructions, get_mood_context
 
 logger = logging.getLogger(__name__)
 
@@ -17,18 +18,20 @@ async def generate_response(
     user_message: str,
     history: list[dict],
     memory: dict | None = None,
-    phase: str = "hook",
-    day_count: int = 1
+    phase: str = "discovery",
+    day_count: int = 1,
+    mood: str = "chill"
 ) -> str:
     """
-    Génère une réponse Luna adaptée à la phase.
+    Génère une réponse Luna avec contexte complet.
 
     Args:
         user_message: Dernier message de l'utilisateur
         history: Historique [{"role": "user/assistant", "content": "..."}]
         memory: Mémoire extraite de l'utilisateur
-        phase: Phase de la relation (hook, deepen, attach, convert)
+        phase: Phase de la relation (discovery, connection, close)
         day_count: Numéro du jour
+        mood: Humeur actuelle (happy, chill, playful, flirty, tired, busy, emotional)
 
     Returns:
         Réponse de Luna
@@ -45,9 +48,14 @@ async def generate_response(
     phase_instructions = get_phase_instructions(phase, day_count)
     system_parts.append(phase_instructions)
 
+    # 4. Ajouter le contexte d'humeur
+    mood_instructions = get_mood_instructions(mood)
+    mood_context = get_mood_context(mood)
+    system_parts.append(f"\n## TON HUMEUR ACTUELLE:\n{mood_instructions}\nContexte: {mood_context}")
+
     system_prompt = "\n".join(system_parts)
 
-    # 4. Température selon la phase
+    # 5. Température selon la phase
     temperature = get_phase_temperature(phase)
 
     # Construire les messages (historique + message actuel)
