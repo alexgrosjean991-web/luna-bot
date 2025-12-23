@@ -10,6 +10,7 @@ from typing import Optional, List
 
 from src.services.conversation_state import ConversationState, state_machine
 from src.services.inner_world import inner_world, InnerState
+from src.services.memory_retrieval import get_memory_retrieval
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,13 @@ class PromptAssembler:
 
     def __init__(self):
         self._cache: dict = {}  # Cache les fichiers chargés
+        self._db = None
+        self._memory_retrieval = None
+
+    def set_db(self, db):
+        """Set database connection for memory retrieval"""
+        self._db = db
+        self._memory_retrieval = get_memory_retrieval(db)
 
     def _load_module(self, name: str, lang: str = "fr") -> str:
         """Charge un module de prompt depuis un fichier"""
@@ -41,14 +49,15 @@ class PromptAssembler:
         self._cache[cache_key] = content
         return content
 
-    def assemble(
+    async def assemble(
         self,
         user_id: int,
         user_name: str,
         affection: float,
         is_converted: bool,
         user_message: str,
-        memories: List[dict],
+        memories: List[dict] = None,
+        history: List[dict] = None,
         last_luna_message: str = "",
         lang: str = "fr"
     ) -> str:
@@ -86,13 +95,14 @@ class PromptAssembler:
         inner_context = inner_world.get_prompt_context(user_id)
         parts.append(inner_context)
 
-        # 4. MEMORIES - Ce que Luna sait sur lui (~100 tokens max)
-        if memories:
-            memory_text = "## CE QUE TU SAIS SUR LUI\n"
-            memory_text += "\n".join([f"- {m['content']}" for m in memories[:8]])
-            parts.append(memory_text)
-        else:
-            parts.append("## CE QUE TU SAIS SUR LUI\nTu sais pas grand chose encore")
+        # 4. MEMORIES - Smart retrieval based on context
+        memory_text = await self._get_contextual_memories(
+            user_id=user_id,
+            user_message=user_message,
+            history=history,
+            fallback_memories=memories
+        )
+        parts.append(f"## CE QUE TU SAIS SUR LUI\n{memory_text}")
 
         # 5. RELATIONSHIP STATUS (~50 tokens)
         relationship_text = self._get_relationship_context(affection, is_converted)
@@ -105,6 +115,35 @@ class PromptAssembler:
         logger.info(f"Prompt assembled: {len(full_prompt)} chars, state={state.value}")
 
         return full_prompt
+
+    async def _get_contextual_memories(
+        self,
+        user_id: int,
+        user_message: str,
+        history: List[dict] = None,
+        fallback_memories: List[dict] = None
+    ) -> str:
+        """
+        Récupère les mémoires pertinentes au contexte.
+        Utilise le smart retrieval si disponible, sinon fallback.
+        """
+        # Use smart retrieval if available
+        if self._memory_retrieval:
+            try:
+                return await self._memory_retrieval.get_contextual_memories(
+                    user_id=user_id,
+                    current_message=user_message,
+                    history=history
+                )
+            except Exception as e:
+                logger.error(f"Memory retrieval error: {e}")
+                # Fall through to fallback
+
+        # Fallback to simple memories
+        if fallback_memories:
+            return "\n".join([f"- {m['content']}" for m in fallback_memories[:8]])
+
+        return "Tu sais pas grand chose sur lui encore."
 
     def _get_relationship_context(self, affection: float, is_converted: bool) -> str:
         """Génère le contexte de relation"""

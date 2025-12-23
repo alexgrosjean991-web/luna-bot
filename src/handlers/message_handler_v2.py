@@ -39,6 +39,7 @@ class MessageHandlerV2:
         # Connect services to DB for persistence
         inner_world.set_db(db)
         state_machine.set_db(db)
+        prompt_assembler.set_db(db)  # Enable smart memory retrieval
 
     async def handle_message(self, update: Update, context) -> None:
         """Main message handler"""
@@ -120,13 +121,14 @@ class MessageHandlerV2:
         await state_machine.load_state_from_db(user_id)
 
         # === ASSEMBLE PROMPT ===
-        system_prompt = prompt_assembler.assemble(
+        system_prompt = await prompt_assembler.assemble(
             user_id=user_id,
             user_name=user_name,
             affection=affection,
             is_converted=is_converted,
             user_message=user_text,
             memories=memories,
+            history=history,  # Pass history for smart memory retrieval
             last_luna_message=last_luna_msg,
             lang="fr" if is_french else "en"
         )
