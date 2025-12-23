@@ -36,7 +36,7 @@ ANTHROPIC_API_VERSION = "2023-06-01"  # LOW FIX: API versioning
 # OpenRouter (modèle premium)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 PREMIUM_MODEL = "neversleep/llama-3.1-lumimaid-70b"
-MAX_TOKENS_PREMIUM = 60  # Court pour style Luna texto
+MAX_TOKENS_PREMIUM = 40  # Très court pour style Luna texto
 
 # Conversion
 PAYMENT_LINK = os.getenv("PAYMENT_LINK", "")
