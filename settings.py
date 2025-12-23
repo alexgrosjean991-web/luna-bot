@@ -28,7 +28,7 @@ if not ANTHROPIC_API_KEY:
     raise ValueError("ANTHROPIC_API_KEY manquant dans .env")
 
 # Constantes LLM Anthropic
-LLM_MODEL = "claude-3-5-haiku-20241022"
+LLM_MODEL = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 80           # Assez pour une réponse complète
 HISTORY_LIMIT = 20
 ANTHROPIC_API_VERSION = "2023-06-01"  # LOW FIX: API versioning
