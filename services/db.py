@@ -1,10 +1,14 @@
 """Gestion PostgreSQL."""
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 import asyncpg
 from settings import DB_CONFIG, HISTORY_LIMIT
 
 logger = logging.getLogger(__name__)
+
+# Timezone Paris (UTC+1/+2)
+PARIS_TZ = timezone(timedelta(hours=1))
 
 pool: asyncpg.Pool | None = None
 
@@ -31,6 +35,12 @@ async def init_db() -> None:
             ON users(telegram_id)
         """)
 
+        # Ajouter last_active si pas présent
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            last_active TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        """)
+
         # Table conversations
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS conversations_minimal (
@@ -44,6 +54,20 @@ async def init_db() -> None:
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_conv_user
             ON conversations_minimal(user_id, created_at DESC)
+        """)
+
+        # Table proactive_log
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS proactive_log (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                message_type VARCHAR(20) NOT NULL,
+                sent_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_proactive_user_date
+            ON proactive_log(user_id, sent_at DESC)
         """)
 
     logger.info("DB connectée")
@@ -138,3 +162,55 @@ async def increment_message_count(user_id: int) -> int:
             user_id
         )
         return row["total_messages"] if row else 0
+
+
+async def update_last_active(user_id: int) -> None:
+    """Met à jour last_active (appelé quand user envoie un message)."""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET last_active = NOW() WHERE id = $1",
+            user_id
+        )
+
+
+async def get_users_for_proactive(inactive_hours: int = 0) -> list[dict]:
+    """Récupère les users éligibles aux messages proactifs."""
+    now = datetime.now(PARIS_TZ)
+    async with pool.acquire() as conn:
+        if inactive_hours > 0:
+            cutoff = now - timedelta(hours=inactive_hours)
+            cutoff_max = now - timedelta(hours=48)
+            rows = await conn.fetch("""
+                SELECT id, telegram_id, last_active, memory
+                FROM users
+                WHERE last_active < $1 AND last_active > $2
+            """, cutoff, cutoff_max)
+        else:
+            cutoff = now - timedelta(hours=48)
+            rows = await conn.fetch("""
+                SELECT id, telegram_id, last_active, memory
+                FROM users
+                WHERE last_active > $1
+            """, cutoff)
+        return [dict(row) for row in rows]
+
+
+async def count_proactive_today(user_id: int) -> int:
+    """Compte les messages proactifs envoyés aujourd'hui à ce user."""
+    now = datetime.now(PARIS_TZ)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT COUNT(*) as count FROM proactive_log
+            WHERE user_id = $1 AND sent_at > $2
+        """, user_id, today_start)
+        return row["count"] if row else 0
+
+
+async def log_proactive(user_id: int, message_type: str) -> None:
+    """Log un message proactif envoyé."""
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO proactive_log (user_id, message_type)
+            VALUES ($1, $2)
+        """, user_id, message_type)
