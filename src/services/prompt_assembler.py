@@ -136,14 +136,39 @@ Status: Vous vous connaissez à peine."""
         """Retourne l'état actuel de conversation"""
         return state_machine.get_last_state(user_id)
 
-    def should_use_nsfw_model(self, user_id: int) -> bool:
-        """Détermine si on doit utiliser le modèle NSFW"""
+    def should_use_nsfw_model(self, user_id: int, history: List[dict] = None) -> bool:
+        """
+        Détermine si on doit utiliser le modèle NSFW.
+        Check aussi l'historique pour éviter que Haiku refuse à cause du contexte.
+        """
+        # Check état actuel
         state = state_machine.get_last_state(user_id)
-        return state in [
+        if state in [
             ConversationState.NSFW_SOFT,
             ConversationState.NSFW_HARD,
             ConversationState.AFTERCARE
-        ]
+        ]:
+            return True
+
+        # Check si l'historique contient du NSFW récent
+        # Haiku refuse si le contexte est NSFW même si le message actuel ne l'est pas
+        if history:
+            nsfw_keywords = [
+                "bite", "cock", "dick", "chatte", "pussy", "sucer", "suck",
+                "baise", "fuck", "jouir", "cum", "gémis", "moan",
+                "nu", "naked", "déshabille", "undress", "sexe", "sex",
+                "caresse", "touche", "embrasse", "corps", "peau",
+                "mmh", "aah", "frisson", "excit"
+            ]
+            # Check les 10 derniers messages
+            recent = history[-10:] if len(history) > 10 else history
+            for msg in recent:
+                content = msg.get('content', '').lower()
+                if any(kw in content for kw in nsfw_keywords):
+                    logger.info("NSFW detected in history, using Dolphin")
+                    return True
+
+        return False
 
 
 # Instance globale

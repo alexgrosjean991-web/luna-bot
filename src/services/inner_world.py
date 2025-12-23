@@ -2,13 +2,14 @@
 Luna's Inner World
 Son état interne qui influence ses réponses.
 Mood, énergie, sentiments envers l'utilisateur.
+Persisté en DB pour survivre aux restarts.
 """
 
 import logging
 import random
 from datetime import datetime, timezone, timedelta
-from dataclasses import dataclass, field
-from typing import Optional, Dict, List
+from dataclasses import dataclass, field, asdict
+from typing import Optional, Dict
 from enum import Enum
 
 logger = logging.getLogger(__name__)
@@ -31,53 +32,106 @@ class Mood(Enum):
 class InnerState:
     """État interne de Luna pour un utilisateur"""
     # Core feelings (0-100)
-    affection: float = 10.0      # Combien elle l'aime
-    trust: float = 20.0          # Combien elle lui fait confiance
-    attraction: float = 15.0     # Attirance physique/sexuelle
-    comfort: float = 10.0        # À l'aise avec lui
+    affection: float = 10.0
+    trust: float = 20.0
+    attraction: float = 15.0
+    comfort: float = 10.0
 
     # Current state
-    mood: Mood = Mood.HAPPY
-    energy: int = 7              # 1-10
-    arousal: int = 0             # 0-10, excitation sexuelle
+    mood: str = "happy"  # String for DB serialization
+    energy: int = 7
+    arousal: int = 0
+
+    # Conversation state
+    current_state: str = "greeting"
+    has_nsfw_history: bool = False
 
     # Session tracking
-    session_start: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     messages_this_session: int = 0
 
-    # Context
-    last_compliment_received: Optional[datetime] = None
-    last_mean_message: Optional[datetime] = None
-    waiting_for_reply_since: Optional[datetime] = None
+    def to_dict(self) -> Dict:
+        """Convert to dict for DB storage"""
+        return {
+            'trust': self.trust,
+            'attraction': self.attraction,
+            'comfort': self.comfort,
+            'mood': self.mood,
+            'energy': self.energy,
+            'arousal': self.arousal,
+            'current_state': self.current_state,
+            'has_nsfw_history': self.has_nsfw_history,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'InnerState':
+        """Create from DB dict"""
+        return cls(
+            trust=data.get('trust', 20),
+            attraction=data.get('attraction', 15),
+            comfort=data.get('comfort', 10),
+            mood=data.get('mood', 'happy'),
+            energy=data.get('energy', 7),
+            arousal=data.get('arousal', 0),
+            current_state=data.get('current_state', 'greeting'),
+            has_nsfw_history=data.get('has_nsfw_history', False),
+        )
 
 
 class InnerWorld:
     """
     Gère l'état interne de Luna pour chaque utilisateur.
-    Simule ses émotions et réactions.
+    Utilise la DB pour persister entre les restarts.
     """
 
     def __init__(self):
-        self._states: Dict[int, InnerState] = {}
+        self._cache: Dict[int, InnerState] = {}  # Cache en RAM
+        self._db = None
 
-    def get_state(self, user_id: int) -> InnerState:
-        """Récupère ou crée l'état interne pour un utilisateur"""
-        if user_id not in self._states:
-            self._states[user_id] = InnerState()
-        return self._states[user_id]
+    def set_db(self, db):
+        """Set database reference"""
+        self._db = db
+
+    async def get_state(self, user_id: int) -> InnerState:
+        """Récupère l'état depuis le cache ou la DB"""
+        if user_id in self._cache:
+            return self._cache[user_id]
+
+        # Load from DB
+        if self._db:
+            db_state = await self._db.get_conversation_state(user_id)
+            state = InnerState.from_dict(db_state)
+            self._cache[user_id] = state
+            return state
+
+        # Fallback
+        state = InnerState()
+        self._cache[user_id] = state
+        return state
+
+    async def save_state(self, user_id: int) -> None:
+        """Sauvegarde l'état en DB"""
+        if user_id not in self._cache:
+            return
+
+        state = self._cache[user_id]
+        if self._db:
+            await self._db.save_conversation_state(user_id, state.to_dict())
 
     def update_from_db(self, user_id: int, db_state: dict) -> InnerState:
-        """Met à jour l'état depuis la DB"""
-        state = self.get_state(user_id)
+        """Met à jour l'état depuis la DB luna_states (affection)"""
+        if user_id not in self._cache:
+            self._cache[user_id] = InnerState()
+
+        state = self._cache[user_id]
         state.affection = db_state.get('affection_level', 10)
         return state
 
-    def process_user_message(self, user_id: int, message: str) -> InnerState:
+    async def process_user_message(self, user_id: int, message: str) -> InnerState:
         """
         Analyse le message et met à jour l'état de Luna.
         Appelé AVANT de générer la réponse.
         """
-        state = self.get_state(user_id)
+        state = await self.get_state(user_id)
         msg_lower = message.lower()
 
         # === DÉTECTION DES COMPLIMENTS ===
@@ -87,12 +141,10 @@ class InnerWorld:
             "intelligente", "smart", "drôle", "funny", "amazing"
         ]
         if any(c in msg_lower for c in compliments):
-            state.last_compliment_received = datetime.now(timezone.utc)
             state.affection = min(100, state.affection + 2)
-            state.mood = Mood.HAPPY if state.mood != Mood.FLIRTY else Mood.FLIRTY
+            state.mood = "happy" if state.mood != "flirty" else "flirty"
             if state.energy < 8:
                 state.energy += 1
-            logger.info(f"Compliment detected, affection +2 -> {state.affection}")
 
         # === DÉTECTION DES MOTS DOUX ===
         sweet_words = [
@@ -102,8 +154,7 @@ class InnerWorld:
         if any(sw in msg_lower for sw in sweet_words):
             state.affection = min(100, state.affection + 3)
             state.trust = min(100, state.trust + 2)
-            state.mood = Mood.HAPPY
-            logger.info(f"Sweet words detected, affection +3 -> {state.affection}")
+            state.mood = "happy"
 
         # === DÉTECTION MESSAGES MÉCHANTS ===
         mean_words = [
@@ -111,12 +162,10 @@ class InnerWorld:
             "boring", "ennuyeuse", "chiante", "annoying"
         ]
         if any(mw in msg_lower for mw in mean_words):
-            state.last_mean_message = datetime.now(timezone.utc)
             state.affection = max(0, state.affection - 5)
             state.trust = max(0, state.trust - 3)
-            state.mood = Mood.SAD
+            state.mood = "sad"
             state.energy = max(1, state.energy - 2)
-            logger.info(f"Mean message detected, affection -5 -> {state.affection}")
 
         # === DÉTECTION INTENTION NSFW ===
         nsfw_indicators = [
@@ -126,65 +175,75 @@ class InnerWorld:
         ]
         explicit_indicators = [
             "bite", "cock", "dick", "chatte", "pussy",
-            "sucer", "suck", "baise", "fuck"
+            "sucer", "suck", "baise", "fuck", "jouir"
         ]
 
         if any(e in msg_lower for e in explicit_indicators):
             state.arousal = min(10, state.arousal + 4)
+            state.has_nsfw_history = True
             if state.affection > 50:
-                state.mood = Mood.HORNY
+                state.mood = "horny"
         elif any(n in msg_lower for n in nsfw_indicators):
             state.arousal = min(10, state.arousal + 2)
+            state.has_nsfw_history = True
             if state.affection > 35:
-                state.mood = Mood.FLIRTY
+                state.mood = "flirty"
 
         # === MISE À JOUR SESSION ===
         state.messages_this_session += 1
 
+        # Save to DB periodically
+        if state.messages_this_session % 5 == 0:
+            await self.save_state(user_id)
+
         return state
 
-    def get_mood_from_context(self, user_id: int, hour: int, affection: float) -> Mood:
-        """
-        Détermine le mood basé sur le contexte (heure, affection).
-        Appelé au début de la conversation.
-        """
-        state = self.get_state(user_id)
+    async def set_conversation_state(self, user_id: int, new_state: str) -> None:
+        """Met à jour l'état de conversation"""
+        state = await self.get_state(user_id)
+        state.current_state = new_state
+        await self.save_state(user_id)
+
+    def get_mood_from_context(self, user_id: int, hour: int, affection: float) -> str:
+        """Détermine le mood basé sur le contexte (heure, affection)."""
+        if user_id not in self._cache:
+            self._cache[user_id] = InnerState()
+
+        state = self._cache[user_id]
 
         # Mood basé sur l'heure
         if 7 <= hour < 10:
-            base_mood = Mood.TIRED
+            base_mood = "tired"
             state.energy = random.randint(3, 5)
         elif 10 <= hour < 17:
-            base_mood = Mood.PLAYFUL
+            base_mood = "playful"
             state.energy = random.randint(6, 8)
         elif 17 <= hour < 22:
-            base_mood = Mood.HAPPY
+            base_mood = "happy"
             state.energy = random.randint(5, 7)
-        else:  # Nuit
-            base_mood = Mood.VULNERABLE
+        else:
+            base_mood = "vulnerable"
             state.energy = random.randint(2, 4)
 
         # Modifier selon l'affection
-        if affection > 70:
-            if random.random() < 0.3:
-                base_mood = Mood.FLIRTY
-        elif affection > 50:
-            if random.random() < 0.2:
-                base_mood = Mood.PLAYFUL
+        if affection > 70 and random.random() < 0.3:
+            base_mood = "flirty"
+        elif affection > 50 and random.random() < 0.2:
+            base_mood = "playful"
 
         state.mood = base_mood
         return base_mood
 
     def get_prompt_context(self, user_id: int) -> str:
-        """
-        Génère le contexte de prompt basé sur l'état interne.
-        Court et percutant.
-        """
-        state = self.get_state(user_id)
-        now = datetime.now(timezone.utc) + timedelta(hours=1)  # Lyon time
+        """Génère le contexte de prompt basé sur l'état interne."""
+        if user_id not in self._cache:
+            self._cache[user_id] = InnerState()
+
+        state = self._cache[user_id]
+        now = datetime.now(timezone.utc) + timedelta(hours=1)
         hour = now.hour
 
-        # Contexte de vie basé sur l'heure
+        # Contexte de vie
         if 7 <= hour < 11:
             contexts = ["viens de te réveiller", "café en main", "cheveux mouillés"]
         elif 11 <= hour < 17:
@@ -199,55 +258,41 @@ class InnerWorld:
 
         life_context = random.choice(contexts)
 
-        # Mood description
         mood_descriptions = {
-            Mood.HAPPY: "de bonne humeur",
-            Mood.PLAYFUL: "joueuse",
-            Mood.FLIRTY: "flirty",
-            Mood.TIRED: "fatiguée",
-            Mood.SAD: "un peu down",
-            Mood.ANXIOUS: "stressée",
-            Mood.EXCITED: "excitée",
-            Mood.VULNERABLE: "vulnérable",
-            Mood.HORNY: "excitée",
+            "happy": "de bonne humeur",
+            "playful": "joueuse",
+            "flirty": "flirty",
+            "tired": "fatiguée",
+            "sad": "un peu down",
+            "anxious": "stressée",
+            "excited": "excitée",
+            "vulnerable": "vulnérable",
+            "horny": "excitée",
         }
 
         mood_text = mood_descriptions.get(state.mood, "normale")
 
-        # Build context
         context = f"""## TON ÉTAT
 Mood: {mood_text}, énergie {state.energy}/10
 Tu es: {life_context}
 Heure: {now.strftime('%Hh%M')}"""
 
-        # Ajouter contexte émotionnel si pertinent
-        if state.last_compliment_received:
-            delta = (datetime.now(timezone.utc) - state.last_compliment_received).total_seconds()
-            if delta < 300:  # 5 min
-                context += "\nIl vient de te faire un compliment, t'es contente 😊"
-
-        if state.last_mean_message:
-            delta = (datetime.now(timezone.utc) - state.last_mean_message).total_seconds()
-            if delta < 600:  # 10 min
-                context += "\nIl a été méchant récemment, t'es un peu froide/blessée"
-
         if state.arousal >= 5:
-            context += "\nY'a de la tension sexuelle 🔥"
+            context += "\nY'a de la tension sexuelle"
 
         return context
 
-    def decay_arousal(self, user_id: int) -> None:
-        """Réduit l'excitation naturellement après un moment"""
-        state = self.get_state(user_id)
-        if state.arousal > 0:
-            state.arousal = max(0, state.arousal - 1)
+    async def has_nsfw_history(self, user_id: int) -> bool:
+        """Check if user has NSFW in history"""
+        state = await self.get_state(user_id)
+        return state.has_nsfw_history
 
-    def reset_session(self, user_id: int) -> None:
-        """Reset la session (après 2h d'inactivité par exemple)"""
-        state = self.get_state(user_id)
-        state.session_start = datetime.now(timezone.utc)
-        state.messages_this_session = 0
-        state.arousal = 0
+    async def mark_nsfw_history(self, user_id: int) -> None:
+        """Mark that this user has NSFW history"""
+        state = await self.get_state(user_id)
+        state.has_nsfw_history = True
+        if self._db:
+            await self._db.mark_nsfw_history(user_id)
 
 
 # Instance globale

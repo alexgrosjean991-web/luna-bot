@@ -77,6 +77,36 @@ class Database:
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             """)
+
+            # Conversation state persistence
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS conversation_states (
+                    id SERIAL PRIMARY KEY,
+                    user_id INT UNIQUE REFERENCES users(id),
+                    current_state VARCHAR(50) DEFAULT 'greeting',
+                    mood VARCHAR(50) DEFAULT 'happy',
+                    energy INT DEFAULT 7,
+                    arousal INT DEFAULT 0,
+                    trust FLOAT DEFAULT 20,
+                    attraction FLOAT DEFAULT 15,
+                    comfort FLOAT DEFAULT 10,
+                    session_start TIMESTAMP DEFAULT NOW(),
+                    has_nsfw_history BOOLEAN DEFAULT FALSE,
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
+            # Memory tiers
+            await conn.execute("""
+                ALTER TABLE memories
+                ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'long'
+            """)
+
+            # Index for faster memory queries
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_memories_tier
+                ON memories(user_id, tier)
+            """)
     
     async def get_or_create_user(self, telegram_id: int, username: str = None,
                                    first_name: str = None, language_code: str = 'en') -> Dict:
@@ -199,6 +229,117 @@ class Database:
         """Close database connection"""
         if self.pool:
             await self.pool.close()
+
+    # === CONVERSATION STATE PERSISTENCE ===
+
+    async def get_conversation_state(self, user_id: int) -> Dict:
+        """Get persisted conversation state"""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM conversation_states WHERE user_id = $1", user_id
+            )
+            if row:
+                return dict(row)
+
+            # Create default state
+            await conn.execute("""
+                INSERT INTO conversation_states (user_id)
+                VALUES ($1) ON CONFLICT (user_id) DO NOTHING
+            """, user_id)
+            return {
+                "current_state": "greeting",
+                "mood": "happy",
+                "energy": 7,
+                "arousal": 0,
+                "trust": 20,
+                "attraction": 15,
+                "comfort": 10,
+                "has_nsfw_history": False
+            }
+
+    async def save_conversation_state(self, user_id: int, state: Dict) -> None:
+        """Save conversation state to DB"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO conversation_states
+                    (user_id, current_state, mood, energy, arousal, trust, attraction, comfort, has_nsfw_history)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    current_state = $2,
+                    mood = $3,
+                    energy = $4,
+                    arousal = $5,
+                    trust = $6,
+                    attraction = $7,
+                    comfort = $8,
+                    has_nsfw_history = $9,
+                    updated_at = NOW()
+            """, user_id,
+                state.get('current_state', 'greeting'),
+                state.get('mood', 'happy'),
+                state.get('energy', 7),
+                state.get('arousal', 0),
+                state.get('trust', 20),
+                state.get('attraction', 15),
+                state.get('comfort', 10),
+                state.get('has_nsfw_history', False)
+            )
+
+    async def mark_nsfw_history(self, user_id: int) -> None:
+        """Mark that this user has NSFW in their history"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE conversation_states
+                SET has_nsfw_history = TRUE, updated_at = NOW()
+                WHERE user_id = $1
+            """, user_id)
+
+    # === MEMORY TIERS ===
+
+    async def store_memory(self, user_id: int, content: str, tier: str = 'long',
+                          memory_type: str = 'semantic', importance: float = 5.0) -> None:
+        """Store a memory with tier classification"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO memories (user_id, content, tier, memory_type, importance)
+                VALUES ($1, $2, $3, $4, $5)
+            """, user_id, content, tier, memory_type, importance)
+
+    async def get_memories_by_tier(self, user_id: int, tier: str, limit: int = 10) -> List[Dict]:
+        """Get memories by tier"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT content, memory_type, importance, created_at
+                FROM memories
+                WHERE user_id = $1 AND tier = $2
+                ORDER BY importance DESC, created_at DESC
+                LIMIT $3
+            """, user_id, tier, limit)
+            return [dict(r) for r in rows]
+
+    async def get_all_memories_tiered(self, user_id: int) -> Dict[str, List[Dict]]:
+        """Get all memories organized by tier"""
+        short = await self.get_memories_by_tier(user_id, 'short', 5)
+        mid = await self.get_memories_by_tier(user_id, 'mid', 10)
+        long = await self.get_memories_by_tier(user_id, 'long', 10)
+        return {'short': short, 'mid': mid, 'long': long}
+
+    async def clear_short_term_memories(self, user_id: int) -> None:
+        """Clear short-term memories (session reset)"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                DELETE FROM memories
+                WHERE user_id = $1 AND tier = 'short'
+            """, user_id)
+
+    async def promote_memory(self, user_id: int, content: str, from_tier: str, to_tier: str) -> None:
+        """Promote a memory from one tier to another"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE memories
+                SET tier = $3, importance = importance + 2
+                WHERE user_id = $1 AND content = $2 AND tier = $4
+            """, user_id, to_tier, content, from_tier)
 
 
 db = Database()

@@ -33,6 +33,8 @@ class MessageHandlerV2:
     def __init__(self, db):
         self.db = db
         self.memory_service = MemoryService(db)
+        # Connect inner_world to DB
+        inner_world.set_db(db)
 
     async def handle_message(self, update: Update, context) -> None:
         """Main message handler"""
@@ -98,10 +100,18 @@ class MessageHandlerV2:
         )
 
         # === DETERMINE MODEL ===
-        use_nsfw_model = prompt_assembler.should_use_nsfw_model(user_id)
+        # Check if has NSFW history (persisted in DB)
+        has_nsfw = await inner_world.has_nsfw_history(user_id)
+
+        # Pass history to check for NSFW context
+        use_nsfw_model = prompt_assembler.should_use_nsfw_model(user_id, history) or has_nsfw
         current_state = prompt_assembler.get_current_state(user_id)
 
-        logger.info(f"State: {current_state.value if current_state else 'none'}, NSFW model: {use_nsfw_model}")
+        # Mark NSFW history if detected
+        if use_nsfw_model and not has_nsfw:
+            await inner_world.mark_nsfw_history(user_id)
+
+        logger.info(f"State: {current_state.value if current_state else 'none'}, NSFW model: {use_nsfw_model}, has_nsfw_history: {has_nsfw}")
 
         # === GENERATE RESPONSE ===
         api_messages = [{"role": msg['role'], "content": msg['content']} for msg in history]
