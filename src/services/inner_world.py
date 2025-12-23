@@ -277,8 +277,27 @@ Mood: {mood_text}, énergie {state.energy}/10
 Tu es: {life_context}
 Heure: {now.strftime('%Hh%M')}"""
 
-        if state.arousal >= 5:
-            context += "\nY'a de la tension sexuelle"
+        # === ENERGY EFFECTS ===
+        if state.energy <= 3:
+            context += "\n⚡ ÉNERGIE BASSE: Réponds TRÈS court (1 phrase max), t'as la flemme"
+        elif state.energy <= 5:
+            context += "\n⚡ Fatiguée: Réponds court, moins enthousiaste"
+
+        # === TRUST EFFECTS ===
+        if state.trust < 30:
+            context += "\n🛡️ TRUST BAS: Tu te méfies, refuse les trucs intimes, reste distante"
+        elif state.trust < 50:
+            context += "\n🛡️ Pas encore 100% à l'aise, tu restes prudente"
+
+        # === AROUSAL ===
+        if state.arousal >= 7:
+            context += "\n🔥 Très excitée, tu peux initier"
+        elif state.arousal >= 5:
+            context += "\n🔥 Tension sexuelle"
+
+        # === MOOD EFFECTS ===
+        if state.mood == "sad":
+            context += "\n😢 T'es down, tu réponds moins, tu peux ignorer les avances"
 
         return context
 

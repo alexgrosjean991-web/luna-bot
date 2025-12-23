@@ -15,7 +15,7 @@ from telegram.constants import ChatAction
 from src.services.llm_service import llm_service
 from src.services.memory_service import MemoryService, ConversionManager, RelationshipManager
 from src.services.prompt_assembler import prompt_assembler
-from src.services.conversation_state import ConversationState
+from src.services.conversation_state import ConversationState, state_machine
 from src.services.inner_world import inner_world
 from src.services.humanizer_fr import humanizer_fr
 from src.services.humanizer_en import humanizer_en
@@ -33,8 +33,9 @@ class MessageHandlerV2:
     def __init__(self, db):
         self.db = db
         self.memory_service = MemoryService(db)
-        # Connect inner_world to DB
+        # Connect services to DB for persistence
         inner_world.set_db(db)
+        state_machine.set_db(db)
 
     async def handle_message(self, update: Update, context) -> None:
         """Main message handler"""
@@ -81,6 +82,9 @@ class MessageHandlerV2:
         history = await self.db.get_conversation_history(user_id, limit=15)
         memories = await self.memory_service.get_memories(user_id)
         last_luna_msg = history[-1]['content'] if history and history[-1]['role'] == 'assistant' else ""
+
+        # === LOAD STATE FROM DB (persistence across restarts) ===
+        await state_machine.load_state_from_db(user_id)
 
         # === ASSEMBLE PROMPT ===
         system_prompt = prompt_assembler.assemble(
@@ -138,6 +142,10 @@ class MessageHandlerV2:
         affection_change = RelationshipManager.calculate_affection_change(user_text)
         await RelationshipManager.update_affection(self.db, user_id, affection_change)
         await self.db.increment_message_count(user_id)
+
+        # === SAVE STATE TO DB (persistence) ===
+        await state_machine.save_state_to_db(user_id, current_state)
+        await inner_world.save_state(user_id)
 
     def _handle_special_input(self, text: str, is_french: bool, affection: float) -> Optional[str]:
         """Gère les inputs spéciaux (?, emoji, ok, lol)"""

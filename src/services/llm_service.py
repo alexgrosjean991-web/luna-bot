@@ -11,9 +11,45 @@ logger = logging.getLogger(__name__)
 class LLMService:
     """Handles LLM API calls - Anthropic for SFW, OpenRouter for NSFW"""
 
+    # Keywords that make Haiku refuse
+    NSFW_KEYWORDS = [
+        "bite", "cock", "dick", "chatte", "pussy", "sucer", "suck",
+        "baise", "fuck", "jouir", "cum", "gémis", "moan", "orgasm",
+        "nu", "naked", "déshabille", "undress", "sexe", "sex",
+        "caresse", "touche", "embrasse", "corps contre", "peau contre",
+        "mmh", "aah", "frisson", "excit", "mouillé", "bandant",
+        "string", "culotte", "soutif", "seins", "nichons"
+    ]
+
     def __init__(self):
         self.anthropic_url = "https://api.anthropic.com/v1/messages"
         self.openrouter_url = "https://openrouter.ai/api/v1/chat/completions"
+
+    def _sanitize_history_for_haiku(self, messages: List[Dict]) -> List[Dict]:
+        """
+        Sanitize history for Haiku to prevent refusals.
+        Removes messages containing NSFW content.
+        """
+        safe_messages = []
+        for msg in messages:
+            content = msg.get('content', '').lower()
+            is_nsfw = any(kw in content for kw in self.NSFW_KEYWORDS)
+            if not is_nsfw:
+                safe_messages.append(msg)
+
+        # Si trop de messages filtrés, garder juste les 3 derniers safe
+        if len(safe_messages) < 3 and len(messages) > 0:
+            # Fallback: garder le dernier message user seulement
+            for msg in reversed(messages):
+                if msg.get('role') == 'user':
+                    content = msg.get('content', '').lower()
+                    if not any(kw in content for kw in self.NSFW_KEYWORDS):
+                        return [msg]
+            # Dernier recours: message vide
+            return [{"role": "user", "content": "hey"}]
+
+        logger.info(f"History sanitized: {len(messages)} -> {len(safe_messages)} messages")
+        return safe_messages
 
     async def generate_response(self, system_prompt: str, messages: List[Dict],
                                   is_nsfw: bool = False, is_french: bool = True) -> str:
@@ -24,7 +60,9 @@ class LLMService:
             response = await self._call_openrouter(system_prompt, messages, is_french)
         else:
             logger.info("💬 CALLING HAIKU (Anthropic)")
-            response = await self._call_anthropic(system_prompt, messages, is_french)
+            # Sanitize history to prevent refusals
+            safe_messages = self._sanitize_history_for_haiku(messages)
+            response = await self._call_anthropic(system_prompt, safe_messages, is_french)
 
         # Appliquer le ResponseFilter (refus AI, actions, emojis, etc.)
         response = response_filter.filter(response, is_french=is_french, max_emojis=2)

@@ -33,6 +33,7 @@ class StateMachine:
     """
     Machine à états pour la conversation.
     Détermine l'état actuel basé sur l'affection, le contexte, et le message.
+    Persiste les états en DB.
     """
 
     # Seuils d'affection pour chaque état
@@ -71,8 +72,51 @@ class StateMachine:
         "mon coeur", "bébé", "baby", "honey",
     ]
 
+    # Map string to enum
+    STATE_MAP = {
+        "greeting": ConversationState.GREETING,
+        "flirt": ConversationState.FLIRT,
+        "tease": ConversationState.TEASE,
+        "nsfw_soft": ConversationState.NSFW_SOFT,
+        "nsfw_hard": ConversationState.NSFW_HARD,
+        "aftercare": ConversationState.AFTERCARE,
+    }
+
     def __init__(self):
         self._last_states: dict = {}  # user_id -> last state
+        self._db = None
+
+    def set_db(self, db):
+        """Set database reference"""
+        self._db = db
+
+    async def load_state_from_db(self, user_id: int) -> Optional[ConversationState]:
+        """Load state from DB if not in cache"""
+        if user_id in self._last_states:
+            return self._last_states[user_id]
+
+        if self._db:
+            try:
+                db_state = await self._db.get_conversation_state(user_id)
+                state_str = db_state.get('current_state', 'greeting')
+                state = self.STATE_MAP.get(state_str, ConversationState.GREETING)
+                self._last_states[user_id] = state
+                logger.info(f"Loaded state from DB for user {user_id}: {state.value}")
+                return state
+            except Exception as e:
+                logger.error(f"Error loading state from DB: {e}")
+
+        return None
+
+    async def save_state_to_db(self, user_id: int, state: ConversationState) -> None:
+        """Save state to DB"""
+        if self._db:
+            try:
+                await self._db.save_conversation_state(user_id, {
+                    'current_state': state.value
+                })
+            except Exception as e:
+                logger.error(f"Error saving state to DB: {e}")
 
     def detect_message_intent(self, message: str) -> Tuple[bool, bool, bool]:
         """
@@ -187,7 +231,15 @@ class StateMachine:
         )
 
         logger.info(f"State transition: {from_state} -> {to_state} ({reason})")
+
+        # Save to DB asynchronously (fire and forget for now)
+        # The actual save happens in the message handler
         return to_state, transition
+
+    def get_state_to_save(self, user_id: int) -> Optional[str]:
+        """Get current state value for DB save"""
+        state = self._last_states.get(user_id)
+        return state.value if state else None
 
     def force_state(self, user_id: int, state: ConversationState) -> None:
         """Force un état (pour debug ou reset)"""
