@@ -53,6 +53,26 @@ class ResponseFilter:
         "n'hésite pas à me demander",
     ]
 
+    # Phrases NSFW passives à supprimer (questions qui cassent le flow)
+    NSFW_PASSIVE_PATTERNS = [
+        "dis-moi ce que tu veux",
+        "dis moi ce que tu veux",
+        "qu'est-ce que tu aimerais",
+        "qu'est-ce que tu voudrais",
+        "que veux-tu faire",
+        "que voudrais-tu",
+        "qu'est-ce qui te ferait plaisir",
+        "quel est ton fantasme",
+        "quels sont tes fantasmes",
+        "tu voudrais faire quoi",
+        "tu veux faire quoi",
+        "qu'est-ce que tu aimerais sentir",
+        "keske tu aimerais",  # typo common
+        "keske tu voudrais",
+        "dis-moi ce qui te ferait",
+        "dis moi ce qui te ferait",
+    ]
+
     # Fallbacks naturels
     FRENCH_FALLBACKS = [
         "hmmm 😏",
@@ -121,6 +141,9 @@ class ResponseFilter:
         # 3. Supprimer les phrases bannies
         response = cls._remove_banned_phrases(response)
 
+        # 3.5 Supprimer les questions passives NSFW
+        response = cls._remove_nsfw_passive(response)
+
         # 4. Limiter les emojis
         response = cls._limit_emojis(response, max_emojis)
 
@@ -173,6 +196,31 @@ class ResponseFilter:
                 pattern = re.compile(re.escape(phrase), re.IGNORECASE)
                 response = pattern.sub('', response)
                 logger.debug(f"Removed banned phrase: {phrase}")
+
+        return response
+
+    @classmethod
+    def _remove_nsfw_passive(cls, response: str) -> str:
+        """Supprime les questions passives qui cassent le flow NSFW"""
+
+        response_lower = response.lower()
+        original = response
+
+        for pattern in cls.NSFW_PASSIVE_PATTERNS:
+            if pattern in response_lower:
+                # Trouver et supprimer la phrase entière jusqu'au ?
+                regex = re.compile(
+                    re.escape(pattern) + r'[^.!?\n]*[?]?',
+                    re.IGNORECASE
+                )
+                response = regex.sub('', response)
+                logger.info(f"🚫 Removed NSFW passive question: {pattern}")
+
+        if response != original:
+            # Nettoyer les espaces et ponctuation orpheline
+            response = re.sub(r'\s+', ' ', response)
+            response = re.sub(r'^\s*[.,;:]\s*', '', response)
+            response = response.strip()
 
         return response
 
