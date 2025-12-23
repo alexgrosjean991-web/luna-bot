@@ -112,6 +112,7 @@ async def should_show_conversion(
         - Engagement élevé (teasing >= 5)
         - A essayé l'aperçu premium (15-30 messages)
         - Pas déjà abonné
+        - Pas déjà montré
     """
     if subscription_status == "active":
         return False
@@ -120,6 +121,10 @@ async def should_show_conversion(
         return False
 
     if teasing_stage < 5:
+        return False
+
+    # CRITICAL FIX: Ne pas remontrer si déjà vu
+    if await has_conversion_been_shown(user_id):
         return False
 
     count = await get_preview_count(user_id)

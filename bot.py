@@ -409,17 +409,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     subscription_status = user_data.get("subscription_status", "trial")
     provider, model = get_llm_config(day_count, teasing_stage, subscription_status)
 
-    # V6: Track premium preview + check conversion
+    # V6: Track premium preview + check if conversion needed AFTER response
+    show_conversion_after = False
     if provider == "openrouter" and subscription_status != "active":
         preview_count = await conversion.increment_preview_count(user_id)
         logger.info(f"Premium preview count: {preview_count}")
 
-        # Check if we should show conversion flow
+        # Check if we should show conversion flow (but after responding)
         if await conversion.should_show_conversion(
             user_id, day_count, teasing_stage, subscription_status
         ):
-            await send_conversion_flow(update, context, user_id)
-            return
+            show_conversion_after = True
 
     # 13. Générer réponse
     try:
@@ -514,6 +514,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     delay_modifier = intermittent.get_delay_modifier(intermittent_state)
     await send_with_natural_delay(update, response, mood, delay_modifier)
 
+    # V6: Show conversion flow AFTER response (not instead of)
+    if show_conversion_after:
+        await send_conversion_flow(update, context, user_id)
+
 
 async def send_conversion_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
     """Envoie le flow de conversion naturel vers l'abonnement."""
@@ -603,6 +607,14 @@ async def send_proactive_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
                         msg_type = "emotional_peak"
                         await set_emotional_state(user_id, "opener")
                         logger.info(f"Emotional peak triggered for user {user_id} (day {day_count})")
+
+            # 2b. V6: Check relance message (après conversion non payée)
+            if not message:
+                relance = await conversion.get_relance_message(user_id)
+                if relance:
+                    message = relance
+                    msg_type = "conversion_relance"
+                    logger.info(f"Conversion relance sent to user {user_id}")
 
             # 3. Regular proactive message
             if not message:
