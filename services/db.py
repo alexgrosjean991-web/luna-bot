@@ -10,13 +10,27 @@ logger = logging.getLogger(__name__)
 pool: asyncpg.Pool | None = None
 
 
+class DatabaseNotInitializedError(Exception):
+    """Raised when trying to use DB before init."""
+    pass
+
+
+def get_pool() -> asyncpg.Pool:
+    """Retourne le pool, raise si non initialisé."""
+    if pool is None:
+        raise DatabaseNotInitializedError(
+            "Database pool not initialized. Call init_db() first."
+        )
+    return pool
+
+
 async def init_db() -> None:
     """Initialise le pool de connexions et crée les tables."""
     global pool
 
     pool = await asyncpg.create_pool(**DB_CONFIG, min_size=DB_POOL_MIN, max_size=DB_POOL_MAX)
 
-    async with pool.acquire() as conn:
+    async with get_pool().acquire() as conn:
         # Table users avec mémoire
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -101,6 +115,16 @@ async def init_db() -> None:
             preparation_sent BOOLEAN DEFAULT FALSE
         """)
 
+        # CRITICAL FIX: Colonnes pour états persistants (au lieu de mémoire)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            emotional_state VARCHAR(20) DEFAULT NULL
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            last_message_at TIMESTAMP WITH TIME ZONE DEFAULT NULL
+        """)
+
     logger.info("DB connectée")
 
 
@@ -115,7 +139,7 @@ async def close_db() -> None:
 
 async def get_history(user_id: int, limit: int = HISTORY_LIMIT) -> list[dict]:
     """Récupère l'historique des messages."""
-    async with pool.acquire() as conn:
+    async with get_pool().acquire() as conn:
         rows = await conn.fetch("""
             SELECT role, content FROM conversations_minimal
             WHERE user_id = $1
@@ -129,7 +153,7 @@ async def get_history(user_id: int, limit: int = HISTORY_LIMIT) -> list[dict]:
 
 async def save_message(user_id: int, role: str, content: str) -> None:
     """Sauvegarde un message."""
-    async with pool.acquire() as conn:
+    async with get_pool().acquire() as conn:
         await conn.execute("""
             INSERT INTO conversations_minimal (user_id, role, content)
             VALUES ($1, $2, $3)
@@ -138,7 +162,7 @@ async def save_message(user_id: int, role: str, content: str) -> None:
 
 async def get_or_create_user(telegram_id: int) -> dict:
     """Récupère ou crée un utilisateur (race-condition safe)."""
-    async with pool.acquire() as conn:
+    async with get_pool().acquire() as conn:
         # INSERT ON CONFLICT évite la race condition
         row = await conn.fetchrow("""
             INSERT INTO users (telegram_id)
@@ -151,7 +175,7 @@ async def get_or_create_user(telegram_id: int) -> dict:
 
 async def get_user_memory(user_id: int) -> dict:
     """Récupère la mémoire d'un utilisateur."""
-    async with pool.acquire() as conn:
+    async with get_pool().acquire() as conn:
         row = await conn.fetchrow(
             "SELECT memory FROM users WHERE id = $1",
             user_id
@@ -164,7 +188,7 @@ async def get_user_memory(user_id: int) -> dict:
 
 async def update_user_memory(user_id: int, memory: dict) -> None:
     """Met à jour la mémoire d'un utilisateur."""
-    async with pool.acquire() as conn:
+    async with get_pool().acquire() as conn:
         await conn.execute(
             "UPDATE users SET memory = $1 WHERE id = $2",
             json.dumps(memory, ensure_ascii=False),
@@ -174,7 +198,7 @@ async def update_user_memory(user_id: int, memory: dict) -> None:
 
 async def increment_message_count(user_id: int) -> int:
     """Incrémente et retourne le compteur de messages."""
-    async with pool.acquire() as conn:
+    async with get_pool().acquire() as conn:
         row = await conn.fetchrow(
             """
             UPDATE users
@@ -189,7 +213,7 @@ async def increment_message_count(user_id: int) -> int:
 
 async def update_last_active(user_id: int) -> None:
     """Met à jour last_active (appelé quand user envoie un message)."""
-    async with pool.acquire() as conn:
+    async with get_pool().acquire() as conn:
         await conn.execute(
             "UPDATE users SET last_active = NOW() WHERE id = $1",
             user_id
@@ -199,7 +223,7 @@ async def update_last_active(user_id: int) -> None:
 async def get_users_for_proactive(inactive_hours: int = 0) -> list[dict]:
     """Récupère les users éligibles aux messages proactifs."""
     now = datetime.now(PARIS_TZ)
-    async with pool.acquire() as conn:
+    async with get_pool().acquire() as conn:
         if inactive_hours > 0:
             cutoff = now - timedelta(hours=inactive_hours)
             cutoff_max = now - timedelta(hours=48)
@@ -222,7 +246,7 @@ async def count_proactive_today(user_id: int) -> int:
     """Compte les messages proactifs envoyés aujourd'hui à ce user."""
     now = datetime.now(PARIS_TZ)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    async with pool.acquire() as conn:
+    async with get_pool().acquire() as conn:
         row = await conn.fetchrow("""
             SELECT COUNT(*) as count FROM proactive_log
             WHERE user_id = $1 AND sent_at > $2
@@ -232,7 +256,7 @@ async def count_proactive_today(user_id: int) -> int:
 
 async def log_proactive(user_id: int, message_type: str) -> None:
     """Log un message proactif envoyé."""
-    async with pool.acquire() as conn:
+    async with get_pool().acquire() as conn:
         await conn.execute("""
             INSERT INTO proactive_log (user_id, message_type)
             VALUES ($1, $2)
@@ -241,7 +265,7 @@ async def log_proactive(user_id: int, message_type: str) -> None:
 
 async def get_user_data(user_id: int) -> dict:
     """Récupère toutes les données utilisateur."""
-    async with pool.acquire() as conn:
+    async with get_pool().acquire() as conn:
         row = await conn.fetchrow("""
             SELECT * FROM users WHERE id = $1
         """, user_id)
@@ -250,7 +274,7 @@ async def get_user_data(user_id: int) -> dict:
 
 async def update_teasing_stage(user_id: int, stage: int) -> None:
     """Met à jour le teasing stage."""
-    async with pool.acquire() as conn:
+    async with get_pool().acquire() as conn:
         await conn.execute(
             "UPDATE users SET teasing_stage = $1 WHERE id = $2",
             stage, user_id
@@ -268,7 +292,7 @@ PHASE_THRESHOLDS = {
 
 async def get_user_phase(user_id: int) -> tuple[str, int]:
     """Calcule la phase actuelle et le jour de relation."""
-    async with pool.acquire() as conn:
+    async with get_pool().acquire() as conn:
         row = await conn.fetchrow("""
             SELECT first_message_at, phase FROM users WHERE id = $1
         """, user_id)
@@ -299,3 +323,41 @@ async def get_user_phase(user_id: int) -> tuple[str, int]:
             """, phase, day_count, user_id)
 
         return phase, day_count
+
+
+# ============== CRITICAL FIX: États persistants ==============
+
+async def get_emotional_state(user_id: int) -> str | None:
+    """Récupère l'état émotionnel persistant."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT emotional_state FROM users WHERE id = $1", user_id
+        )
+        return row["emotional_state"] if row else None
+
+
+async def set_emotional_state(user_id: int, state: str | None) -> None:
+    """Met à jour l'état émotionnel."""
+    async with get_pool().acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET emotional_state = $1 WHERE id = $2",
+            state, user_id
+        )
+
+
+async def get_last_message_time(user_id: int) -> datetime | None:
+    """Récupère le timestamp du dernier message."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT last_message_at FROM users WHERE id = $1", user_id
+        )
+        return row["last_message_at"] if row else None
+
+
+async def set_last_message_time(user_id: int) -> None:
+    """Met à jour le timestamp du dernier message."""
+    async with get_pool().acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET last_message_at = NOW() WHERE id = $1",
+            user_id
+        )

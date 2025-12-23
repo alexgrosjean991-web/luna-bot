@@ -8,10 +8,12 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 from settings import TELEGRAM_BOT_TOKEN
 from services.db import (
-    init_db, close_db, save_message, get_history, pool,
+    init_db, close_db, save_message, get_history, get_pool,
     get_or_create_user, get_user_memory, update_user_memory, increment_message_count,
     update_last_active, get_users_for_proactive, count_proactive_today, log_proactive,
-    get_user_data, update_teasing_stage
+    get_user_data, update_teasing_stage,
+    # CRITICAL FIX: États persistants
+    get_emotional_state, set_emotional_state, set_last_message_time
 )
 from services.llm import generate_response
 from services.memory import extract_memory
@@ -43,13 +45,26 @@ logger = logging.getLogger(__name__)
 # Extraction mémoire tous les X messages
 MEMORY_EXTRACTION_INTERVAL = 5
 
-# Rate limiting
+# Rate limiting (en mémoire, acceptable car non-critique)
 RATE_LIMIT_SECONDS = 1.0
 user_last_message: dict[int, float] = defaultdict(float)
 
-# Emotional peak state tracker (in-memory, reset on restart)
-# States: None, "opener", "follow_up", "resolution", "done"
-user_emotional_state: dict[int, str | None] = defaultdict(lambda: None)
+# ============== CRITICAL FIX: Sanitization ==============
+MAX_MESSAGE_LENGTH = 2000
+
+
+def sanitize_input(text: str | None) -> str | None:
+    """Valide et nettoie l'entrée utilisateur."""
+    if not text:
+        return None
+
+    # Limiter la longueur
+    text = text[:MAX_MESSAGE_LENGTH]
+
+    # Supprimer caractères de contrôle (sauf newlines)
+    text = ''.join(c for c in text if c.isprintable() or c in '\n\r')
+
+    return text.strip() or None
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -64,8 +79,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Handler principal avec tous les systèmes intégrés."""
     tg_user = update.effective_user
     telegram_id = tg_user.id
-    user_text = update.message.text
 
+    # CRITICAL FIX: Sanitization des entrées
+    user_text = sanitize_input(update.message.text)
     if not user_text:
         return
 
@@ -76,14 +92,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     user_last_message[telegram_id] = now
 
-    logger.info(f"[{tg_user.first_name}] {user_text}")
+    logger.info(f"[{tg_user.first_name}] {user_text[:100]}...")  # Tronquer dans les logs
 
     # 1. Get/create user
     user = await get_or_create_user(telegram_id)
     user_id = user["id"]
 
-    # 2. Update last_active
+    # 2. Update last_active + last_message_at (persistant)
     await update_last_active(user_id)
+    await set_last_message_time(user_id)
 
     # 3. Sauvegarder message user
     await save_message(user_id, "user", user_text)
@@ -100,14 +117,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # 7. Vérifier subscription (paywall après 5 jours)
     if first_message_at and is_trial_expired(first_message_at):
-        paywall_sent = await has_paywall_been_sent(user_id, pool)
+        paywall_sent = await has_paywall_been_sent(user_id, get_pool())
 
         if not paywall_sent:
             # Premier message après trial: envoyer paywall
             paywall_msg = get_paywall_message(first_message_at, user_id)
             await update.message.reply_text(paywall_msg)
             await save_message(user_id, "assistant", paywall_msg)
-            await mark_paywall_sent(user_id, pool)
+            await mark_paywall_sent(user_id, get_pool())
             logger.info(f"Paywall envoyé à user {user_id}")
             return
         else:
@@ -124,20 +141,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # 9. Déterminer mood
     mood = get_current_mood()
 
-    # 10. Get current emotional state
-    emotional_state = user_emotional_state[user_id]
+    # 10. CRITICAL FIX: Get emotional state from DB (persistant)
+    emotional_state = await get_emotional_state(user_id)
 
     logger.info(f"User {user_id}: Phase={phase}, Day={day_count}, Mood={mood}, EmotionalState={emotional_state}")
 
-    # 11. Progress emotional state if user responded
+    # 11. Progress emotional state if user responded (persistant)
     if emotional_state == "opener":
-        user_emotional_state[user_id] = "follow_up"
+        await set_emotional_state(user_id, "follow_up")
         emotional_state = "follow_up"
     elif emotional_state == "follow_up":
-        user_emotional_state[user_id] = "resolution"
+        await set_emotional_state(user_id, "resolution")
         emotional_state = "resolution"
     elif emotional_state == "resolution":
-        user_emotional_state[user_id] = "done"
+        await set_emotional_state(user_id, None)
         emotional_state = None  # Don't pass to LLM, peak is over
 
     # 12. Check teasing opportunity (J2-5)
@@ -205,21 +222,22 @@ async def send_proactive_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
 
             # 1. Check J5 preparation message (soir J5)
             if first_message_at and should_send_preparation(first_message_at):
-                prep_sent = await has_preparation_been_sent(user_id, pool)
+                prep_sent = await has_preparation_been_sent(user_id, get_pool())
                 if not prep_sent:
                     message = get_preparation_message()
                     msg_type = "preparation"
-                    await mark_preparation_sent(user_id, pool)
+                    await mark_preparation_sent(user_id, get_pool())
                     logger.info(f"Preparation message sent to user {user_id}")
 
             # 2. Check emotional peak trigger (J3-5, specific hours)
+            # CRITICAL FIX: utiliser état persistant
             if not message and day_count in [3, 4, 5]:
-                # Don't trigger if already in emotional state
-                if user_emotional_state[user_id] is None:
+                current_emotional_state = await get_emotional_state(user_id)
+                if current_emotional_state is None:
                     if should_trigger_emotional_peak(day_count, current_hour):
                         message = get_emotional_opener(day_count)
                         msg_type = "emotional_peak"
-                        user_emotional_state[user_id] = "opener"
+                        await set_emotional_state(user_id, "opener")
                         logger.info(f"Emotional peak triggered for user {user_id} (day {day_count})")
 
             # 3. Regular proactive message

@@ -1,4 +1,5 @@
 """Système de disponibilité de Luna - délais naturels."""
+import os
 import random
 import asyncio
 import logging
@@ -7,6 +8,9 @@ from telegram import Update, constants
 from settings import PARIS_TZ
 
 logger = logging.getLogger(__name__)
+
+# Mode test désactivable via env var (LUNA_TEST_MODE=true)
+TEST_MODE = os.getenv("LUNA_TEST_MODE", "false").lower() == "true"
 
 # Délais de base en secondes selon l'heure
 BASE_DELAYS = {
@@ -51,6 +55,10 @@ def get_time_period(hour: int) -> str:
 
 def calculate_delay(mood: str = "chill") -> float:
     """Calcule le délai de réponse en secondes."""
+    # Mode test: délai minimal
+    if TEST_MODE:
+        return 0.5
+
     now = datetime.now(PARIS_TZ)
     period = get_time_period(now.hour)
 
