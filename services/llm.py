@@ -1,4 +1,5 @@
 """Client LLM (Anthropic Claude) avec contexte mood/phase/story/peaks."""
+import re
 import logging
 import httpx
 from pathlib import Path
@@ -11,6 +12,17 @@ from services.teasing import get_teasing_instruction
 from services.emotional_peaks import get_emotional_instruction
 
 logger = logging.getLogger(__name__)
+
+
+def clean_response(text: str) -> str:
+    """Supprime les astérisques d'action (*rit*, *sourit*, etc.) de la réponse."""
+    # Pattern pour matcher *texte* (actions entre astérisques)
+    cleaned = re.sub(r'\*[^*]+\*', '', text)
+    # Nettoyer les espaces multiples et les sauts de ligne en trop
+    cleaned = re.sub(r'  +', ' ', cleaned)
+    cleaned = re.sub(r'\n\s*\n', '\n', cleaned)
+    return cleaned.strip()
+
 
 # Charger le system prompt de base
 PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "luna.txt"
@@ -111,7 +123,9 @@ async def generate_response(
             )
             response.raise_for_status()
             data = response.json()
-            return data["content"][0]["text"]
+            raw_text = data["content"][0]["text"]
+            # Supprimer les astérisques d'action
+            return clean_response(raw_text)
     except Exception as e:
         logger.error(f"Erreur LLM: {e}")
         return "dsl j'ai bugé 😅"
