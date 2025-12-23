@@ -202,6 +202,10 @@ class ResponseFilter:
     def _clean_artifacts(cls, response: str) -> str:
         """Nettoie les artifacts courants des LLM"""
 
+        # === SUPPRIMER TOUS LES ASTÉRISQUES ===
+        # Luna n'utilise JAMAIS d'astérisques (ni pour actions ni pour emphase)
+        response = response.replace('*', '')
+
         # Supprimer les espaces multiples
         response = re.sub(r' +', ' ', response)
 
@@ -223,6 +227,9 @@ class ResponseFilter:
         # Nettoyer les espaces autour de la ponctuation
         response = re.sub(r'\s+([.,!?])', r'\1', response)
         response = re.sub(r'([.,!?])\s+', r'\1 ', response)
+
+        # Nettoyer les virgules doublées ou mal placées (,, ou , ,)
+        response = re.sub(r',\s*,', ',', response)
 
         return response.strip()
 
