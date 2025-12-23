@@ -1,6 +1,9 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+load_dotenv()  # Load .env before anything else
+
 from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler as TGMessageHandler, filters
 
