@@ -26,8 +26,8 @@ class LLMService:
             logger.info("💬 CALLING HAIKU (Anthropic)")
             response = await self._call_anthropic(system_prompt, messages, is_french)
 
-        # Appliquer le ResponseFilter (refus AI, emojis, markdown, etc.)
-        response = response_filter.filter(response, is_french=is_french, max_emojis=1)
+        # Appliquer le ResponseFilter (refus AI, actions, emojis, etc.)
+        response = response_filter.filter(response, is_french=is_french, max_emojis=2)
 
         return response
     

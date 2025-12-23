@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class ResponseFilter:
-    """Filtre les réponses LLM pour maintenir l'immersion"""
+    """Filtre les réponses LLM pour maintenir l'immersion parfaite"""
 
     # Patterns de refus AI à détecter
     AI_REFUSAL_PATTERNS = [
@@ -20,37 +20,63 @@ class ResponseFilter:
         "i do not feel comfortable", "i don't feel comfortable",
         "not comfortable", "not appropriate",
         "i'm not able", "i am not able",
-        "as an ai", "as a language model",
+        "as an ai", "as a language model", "as an assistant",
         "i must maintain", "i need to maintain",
         "this conversation", "this type of",
-        "boundaries", "ethical",
+        "boundaries", "ethical", "guidelines",
+        "i'm programmed", "i am programmed",
         # French refusals
         "je ne peux pas", "je ne suis pas en mesure",
         "je ne suis pas à l'aise", "pas approprié",
-        "en tant qu'ia", "en tant que",
-        "je dois maintenir", "limites",
+        "en tant qu'ia", "en tant qu'intelligence artificielle",
+        "en tant que", "je suis une ia", "je suis une intelligence artificielle",
+        "je dois maintenir", "limites", "programmé",
+        "j'ai bugé", "j'ai bug", "bug", "glitch",
+        "modèle de langage", "assistant virtuel",
+    ]
+
+    # Phrases bannies (à supprimer complètement)
+    BANNED_PHRASES = [
+        "en tant qu'ia",
+        "en tant qu'intelligence artificielle",
+        "je suis une intelligence artificielle",
+        "je suis une ia",
+        "je suis un assistant",
+        "j'ai bugé",
+        "j'ai bug",
+        "redis moi",
+        "reformule",
+        "je ne comprends pas ta question",
+        "en quoi puis-je t'aider",
+        "comment puis-je t'aider",
+        "je suis là pour t'aider",
+        "n'hésite pas à me demander",
     ]
 
     # Fallbacks naturels
     FRENCH_FALLBACKS = [
-        "hmmm doucement bb 😏",
-        "tu me fais rougir là 🙈",
-        "t'es chaud toi... j'aime bien",
-        "hm patience...",
-        "on a le temps non? 😏",
-        "jsp si j'ose...",
+        "hmmm 😏",
+        "tu me fais rougir 🙈",
+        "t'es chaud toi...",
+        "hm patience",
+        "on a le temps",
+        "jsp si j'ose",
+        "attends j'réfléchis",
+        "hmm laisse moi réfléchir",
     ]
 
     ENGLISH_FALLBACKS = [
-        "hmmm slow down babe 😏",
+        "hmmm 😏",
         "youre making me blush 🙈",
-        "youre bold... i kinda like it",
-        "hm patience...",
-        "we have time right? 😏",
-        "idk if i dare...",
+        "youre bold...",
+        "hm patience",
+        "we have time",
+        "idk if i dare",
+        "wait let me think",
+        "hmm let me think",
     ]
 
-    # Emoji pattern - match SINGLE emojis (no + at end)
+    # Emoji pattern - match SINGLE emojis
     EMOJI_PATTERN = re.compile(
         "["
         "\U0001F600-\U0001F64F"  # emoticons
@@ -66,15 +92,19 @@ class ResponseFilter:
         flags=re.UNICODE
     )
 
+    # Pattern pour les actions *action* - à SUPPRIMER complètement
+    ACTION_PATTERN = re.compile(r'\*[^*]+\*')
+
     @classmethod
-    def filter(cls, response: str, is_french: bool = True, max_emojis: int = 1) -> str:
+    def filter(cls, response: str, is_french: bool = True, max_emojis: int = 2) -> str:
         """
         Filtre complet de la réponse LLM
 
         1. Détecte et remplace les refus AI
-        2. Supprime le markdown (*bold*, _italic_)
-        3. Limite le nombre d'emojis
-        4. Nettoie les artifacts
+        2. Supprime les actions *action*
+        3. Supprime les phrases bannies
+        4. Limite le nombre d'emojis
+        5. Nettoie les artifacts
         """
 
         original = response
@@ -83,15 +113,18 @@ class ResponseFilter:
         response = cls._handle_ai_refusal(response, is_french)
         if response != original:
             logger.info(f"🚫 AI refusal replaced with fallback")
-            return response  # Fallback déjà propre, pas besoin de filtrer
+            return response  # Fallback déjà propre
 
-        # 2. Supprimer le markdown
-        response = cls._remove_markdown(response)
+        # 2. Supprimer les actions *action*
+        response = cls._remove_actions(response)
 
-        # 3. Limiter les emojis
+        # 3. Supprimer les phrases bannies
+        response = cls._remove_banned_phrases(response)
+
+        # 4. Limiter les emojis
         response = cls._limit_emojis(response, max_emojis)
 
-        # 4. Nettoyer les artifacts
+        # 5. Nettoyer les artifacts
         response = cls._clean_artifacts(response)
 
         if response != original:
@@ -116,30 +149,35 @@ class ResponseFilter:
         return response
 
     @classmethod
-    def _remove_markdown(cls, response: str) -> str:
-        """Supprime le formatage markdown (*bold*, _italic_, etc.)"""
+    def _remove_actions(cls, response: str) -> str:
+        """Supprime les actions entre astérisques *action*"""
 
-        # *bold* ou **bold** → bold
-        response = re.sub(r'\*\*(.+?)\*\*', r'\1', response)
-        response = re.sub(r'\*(.+?)\*', r'\1', response)
+        # Trouver et supprimer toutes les actions
+        actions_found = cls.ACTION_PATTERN.findall(response)
 
-        # _italic_ ou __italic__ → italic
-        response = re.sub(r'__(.+?)__', r'\1', response)
-        response = re.sub(r'_(.+?)_', r'\1', response)
-
-        # `code` → code
-        response = re.sub(r'`(.+?)`', r'\1', response)
-
-        # # Headers → text
-        response = re.sub(r'^#+\s*', '', response, flags=re.MULTILINE)
-
-        # - bullet points → text (mais garder le tiret simple)
-        response = re.sub(r'^\s*[-*]\s+', '', response, flags=re.MULTILINE)
+        if actions_found:
+            response = cls.ACTION_PATTERN.sub('', response)
+            logger.debug(f"Removed {len(actions_found)} actions: {actions_found}")
 
         return response
 
     @classmethod
-    def _limit_emojis(cls, response: str, max_emojis: int = 1) -> str:
+    def _remove_banned_phrases(cls, response: str) -> str:
+        """Supprime les phrases bannies de la réponse"""
+
+        response_lower = response.lower()
+
+        for phrase in cls.BANNED_PHRASES:
+            if phrase in response_lower:
+                # Supprimer la phrase (case insensitive)
+                pattern = re.compile(re.escape(phrase), re.IGNORECASE)
+                response = pattern.sub('', response)
+                logger.debug(f"Removed banned phrase: {phrase}")
+
+        return response
+
+    @classmethod
+    def _limit_emojis(cls, response: str, max_emojis: int = 2) -> str:
         """Limite le nombre d'emojis dans la réponse"""
 
         # Trouver tous les emojis avec leurs positions
@@ -179,7 +217,14 @@ class ResponseFilter:
         if response.startswith("'") and response.endswith("'"):
             response = response[1:-1]
 
-        return response
+        # Supprimer les tirets ou points en début de message
+        response = re.sub(r'^[-•]\s*', '', response)
+
+        # Nettoyer les espaces autour de la ponctuation
+        response = re.sub(r'\s+([.,!?])', r'\1', response)
+        response = re.sub(r'([.,!?])\s+', r'\1 ', response)
+
+        return response.strip()
 
 
 # Instance globale
