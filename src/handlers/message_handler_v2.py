@@ -20,6 +20,8 @@ from src.services.inner_world import inner_world
 from src.services.humanizer_fr import humanizer_fr
 from src.services.humanizer_en import humanizer_en
 from src.services.realistic_delays import delay_service, typing_simulator, split_message_naturally
+from src.services.memory_extractor import get_memory_extractor
+from src.services.human_behavior import human_behavior, BehaviorType
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,7 @@ class MessageHandlerV2:
     def __init__(self, db):
         self.db = db
         self.memory_service = MemoryService(db)
+        self.memory_extractor = get_memory_extractor(db)
         # Connect services to DB for persistence
         inner_world.set_db(db)
         state_machine.set_db(db)
@@ -74,6 +77,36 @@ class MessageHandlerV2:
         if should_limit and not is_converted:
             await self._handle_trial_limit(message, is_french)
             return
+
+        # === DECIDE HUMAN BEHAVIOR ===
+        hour = datetime.now().hour
+        messages_today = await self.db.get_messages_today(user_id)
+
+        behavior = human_behavior.decide_behavior(
+            user_id=user.id,
+            affection=affection,
+            hour=hour,
+            message_length=len(user_text),
+            is_nsfw=False,  # Will be determined later
+            messages_today=messages_today
+        )
+
+        logger.info(f"Behavior: {behavior.behavior.value}, delay: {behavior.initial_delay:.1f}s")
+
+        # === APPLY BEHAVIOR ===
+        if behavior.behavior == BehaviorType.TYPING_ABANDON:
+            # Show typing then stop (rare, creates suspense)
+            await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
+            await asyncio.sleep(random.uniform(2, 4))
+            # Luna got distracted, will reply later
+            logger.info("Typing abandon - Luna got distracted")
+            # Schedule delayed response (simplified: just add extra delay)
+            behavior.initial_delay += random.uniform(30, 120)
+
+        # === INITIAL DELAY (simulates reading + life) ===
+        if behavior.initial_delay > 2:
+            # For long delays, don't keep user waiting in "typing"
+            await asyncio.sleep(min(behavior.initial_delay, 60))  # Cap at 60s for UX
 
         # === SHOW TYPING ===
         await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
@@ -128,6 +161,13 @@ class MessageHandlerV2:
             is_french=is_french
         )
 
+        # === ADD EXCUSE IF DELAYED ===
+        if behavior.excuse_message and behavior.behavior in [BehaviorType.DELAYED, BehaviorType.SEEN_NO_REPLY]:
+            await message.reply_text(behavior.excuse_message)
+            await asyncio.sleep(random.uniform(0.5, 1.5))
+            await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
+            await asyncio.sleep(random.uniform(1.0, 2.5))
+
         # === SEND WITH REALISTIC DELAYS ===
         await self._send_with_delays(
             message, context, response, user_id, user_text,
@@ -146,6 +186,11 @@ class MessageHandlerV2:
         # === SAVE STATE TO DB (persistence) ===
         await state_machine.save_state_to_db(user_id, current_state)
         await inner_world.save_state(user_id)
+
+        # === ASYNC MEMORY EXTRACTION (fire-and-forget) ===
+        # Extract memories from conversation using Sonnet
+        api_messages_with_response = api_messages + [{"role": "assistant", "content": response}]
+        await self.memory_extractor.extract_async(user_id, api_messages_with_response)
 
     def _handle_special_input(self, text: str, is_french: bool, affection: float) -> Optional[str]:
         """Gère les inputs spéciaux (?, emoji, ok, lol)"""
