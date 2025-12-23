@@ -6,7 +6,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler as TGMessag
 
 from config.settings import config
 from src.database.models import db
-from src.handlers.message_handler import MessageHandler
+from src.handlers.message_handler_v2 import MessageHandlerV2 as MessageHandler
 from src.services.proactive_messages import ProactiveMessageService
 from src.services.memory_service import ConversionManager
 
