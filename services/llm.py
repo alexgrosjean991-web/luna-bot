@@ -32,9 +32,11 @@ def clean_response(text: str) -> str:
     return cleaned.strip()
 
 
-# Charger le system prompt de base
+# Charger les system prompts
 PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "luna.txt"
+PROMPT_NSFW_PATH = Path(__file__).parent.parent / "prompts" / "luna_nsfw.txt"
 BASE_SYSTEM_PROMPT = PROMPT_PATH.read_text(encoding="utf-8")
+NSFW_SYSTEM_PROMPT = PROMPT_NSFW_PATH.read_text(encoding="utf-8")
 
 # URLs des APIs
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
@@ -164,8 +166,9 @@ async def generate_response(
     Returns:
         Réponse de Luna
     """
-    # 1. Construire le system prompt
-    system_parts = [BASE_SYSTEM_PROMPT]
+    # 1. Construire le system prompt (NSFW pour OpenRouter)
+    base_prompt = NSFW_SYSTEM_PROMPT if provider == "openrouter" else BASE_SYSTEM_PROMPT
+    system_parts = [base_prompt]
 
     # 2. Ajouter la mémoire
     if memory:
