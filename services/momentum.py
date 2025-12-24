@@ -62,46 +62,75 @@ NSFW_PATTERNS = [
 ]
 
 # HOT: Very suggestive, physical desire
+# ATTENTION: Éviter les mots trop génériques (lit, chaud, corps, peau, bouche)
+# qui matchent des contextes innocents (météo, anatomie, etc.)
 HOT_KEYWORDS = [
-    'envie de toi', 'te veux', 'j\'ai envie', 'tellement envie',
-    'corps', 'peau', 'mains sur', 'toucher', 'caresser',
+    'envie de toi', 'te veux', 'tellement envie',
     'nu', 'nue', 'déshabille', 'string', 'culotte',
-    'lit', 'chaud', 'chaude', 'excité', 'excitée',
-    'embrasser', 'bouche', 'lèvres',
-    'enleve', 'enlève', 'retire', 'désape',  # "enleve le" etc.
+    'excité', 'excitée', 'caresser', 'caresse',
+    'enleve', 'enlève', 'retire', 'désape',
 ]
 
 HOT_PATTERNS = [
     r'j\'ai (?:tellement |trop |)envie de toi',
-    r'je (?:te |)veux',
+    r'j\'ai envie de (?:toi|te)',
+    r'je (?:te |)veux (?:tellement|trop|maintenant)',
     r'si (?:tu étais|t\'étais) là',
     r'dans (?:mon |ton )lit',
-    r'(?:tes |mes )mains sur',
+    r'(?:tes |mes )mains sur (?:moi|toi|mon|ton)',
+    r'(?:ton |mon )corps (?:contre|sur|près)',
+    r'(?:ta |ma )peau (?:contre|sur|douce)',
+    r'j\'ai (?:trop |tellement |)chaud (?:là|maintenant|avec toi)',
+    r'(?:te |)toucher (?:partout|là)',
+    r'(?:t\'|te )embrasser',
 ]
 
 # FLIRT: Light flirting, romantic interest
+# Note: "manque" retiré car trop générique ("il me manque de l'argent")
 FLIRT_KEYWORDS = [
-    'mignon', 'belle', 'beau', 'canon', 'craquant',
-    'pense à toi', 'tu me manques', 'manque', 'rêvé de toi',
-    'adorable', 'sexy', 'attiré', 't\'aime bien',
-    'hâte de te voir', 'sourire'
+    'mignon', 'mignonne', 'belle', 'beau', 'canon', 'craquant', 'craquante',
+    'pense à toi', 'tu me manques', 'rêvé de toi',
+    'adorable', 'sexy', 'attiré', 'attirée', 't\'aime bien',
+    'hâte de te voir', 'bisou', 'bisous', 'câlin'
 ]
 
 FLIRT_PATTERNS = [
     r'tu me manques',
     r'je pense à toi',
-    r't\'es (?:trop |)(?:mignon|beau|canon)',
-    r'j\'(?:aime|adore) (?:bien |)(?:parler avec toi|te parler)',
+    r't\'es (?:trop |vraiment |)(?:mignon|mignonne|beau|belle|canon)',
+    r'j\'(?:aime|adore) (?:bien |trop |)(?:parler avec toi|te parler|discuter avec toi)',
+    r'(?:gros |plein de |)bisous?',
 ]
 
 # Negative emotions: Block escalation
+# Doit être vérifié AVANT les autres patterns (priorité haute)
 NEGATIVE_PATTERNS = [
-    r'je (?:suis |me sens )(?:triste|mal|déprimée?|seule?|anxieux|anxieuse|pas bien)',
-    r'j\'ai (?:envie de |)(?:pleurer|mourir)',
+    # États émotionnels directs
+    r'je (?:suis |me sens )(?:triste|mal|déprimée?|seule?|anxieux|anxieuse|pas bien|nulle?|vidée?)',
+    r'je (?:vais |)(?:pas bien|mal)',
+    r'ça (?:va |)(?:pas|plus)',
+
+    # Dépression / désespoir
+    r'j\'ai (?:envie de |)(?:pleurer|mourir|disparaître)',
     r'personne (?:ne |)(?:m\'aime|me comprend)',
     r'j\'en (?:peux |ai )plus',
-    r'ça (?:va |)(?:pas|plus)',
-    r'je (?:vais |)(?:pas bien|mal)',
+    r'j\'ai pas envie',
+    r'(?:ça|c\'est) (?:pas |)la peine',
+    r'à quoi (?:ça |)sert',
+    r'je (?:sers|vaux) (?:à |)rien',
+
+    # Anxiété / stress
+    r'j\'ai peur',
+    r'(?:je suis |j\'suis |jsuis )(?:stressée?|angoissée?|paniquée?)',
+    r'j\'angoisse',
+    r'ça m\'angoisse',
+
+    # Mal-être général
+    r'j\'en ai marre',
+    r'ça me (?:fait chier|saoule|gonfle)',
+    r'c\'est (?:trop |)(?:dur|difficile|compliqué)',
+    r'je (?:supporte|comprends) (?:plus|pas)',
+    r'(?:je |j\')(?:me |)(?:déteste|hais)',
 ]
 
 # Climax indicators (user messages)
