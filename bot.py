@@ -592,8 +592,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # 6. Calculer phase et jour
     phase, day_count = get_relationship_phase(first_message_at)
 
-    # 7. Vérifier subscription (paywall après 5 jours)
-    if first_message_at and is_trial_expired(first_message_at):
+    # 7. Vérifier subscription (paywall après 5 jours, sauf si abonné)
+    subscription_status = user_data.get("subscription_status", "trial")
+    if subscription_status != "active" and first_message_at and is_trial_expired(first_message_at):
         paywall_sent = await has_paywall_been_sent(user_id, get_pool())
 
         if not paywall_sent:
