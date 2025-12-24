@@ -18,7 +18,8 @@ def get_llm_config(
     teasing_stage: int,
     subscription_status: str,
     hour: int | None = None,
-    current_level: int = 1
+    current_level: int = 1,
+    level_modifier: str | None = None
 ) -> tuple[str, str]:
     """
     Retourne (provider, model) selon contexte utilisateur.
@@ -29,12 +30,14 @@ def get_llm_config(
         subscription_status: "trial" ou "active"
         hour: Heure actuelle (optionnel, pour tests)
         current_level: Niveau de conversation (1=SFW, 2=TENSION, 3=NSFW)
+        level_modifier: Modificateur (AFTERCARE, POST_NSFW, etc.)
 
     Returns:
         Tuple (provider, model_name)
 
     Logic:
         - NSFW niveau 3 → TOUJOURS Magnum (Haiku ne sait pas faire du NSFW)
+        - AFTERCARE/POST_NSFW → Magnum (historique NSFW, Haiku refuse)
         - Abonné actif → OpenRouter/Magnum
         - J5 20h+ avec teasing >= 5 → OpenRouter (aperçu)
         - J5 teasing >= 6 (user très engagé) → OpenRouter
@@ -46,6 +49,11 @@ def get_llm_config(
     # CRITIQUE: NSFW niveau 3 = toujours Magnum (Haiku refuse/échoue)
     if current_level >= 3:
         logger.info(f"Router: Magnum (NSFW level {current_level})")
+        return ("openrouter", "anthracite-org/magnum-v4-72b")
+
+    # AFTERCARE/POST_NSFW = historique NSFW, Haiku refuse
+    if level_modifier in ("AFTERCARE", "POST_NSFW"):
+        logger.info(f"Router: Magnum ({level_modifier} - NSFW history)")
         return ("openrouter", "anthracite-org/magnum-v4-72b")
 
     # Abonnés = toujours premium

@@ -27,7 +27,7 @@ class EmotionalState(IntEnum):
 # ============== PATTERNS DE DÉTECTION ==============
 
 NSFW_KEYWORDS = [
-    'baise', 'suce', 'bite', 'chatte', 'jouir', 'orgasme',
+    'baise', 'suce', 'bite', 'chatte', 'jouir', 'jouis', 'orgasme',
     'pénètre', 'enfonce', 'gémis', 'encule', 'sodomise',
     'avale', 'éjacule', 'levrette', 'doigte', 'branle',
     'sperme', 'mouillée', 'trempée', 'bandé'
