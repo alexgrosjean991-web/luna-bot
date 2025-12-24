@@ -14,7 +14,7 @@ PROACTIVE_CONFIG = {
             "prob": 0.70,
             "messages": [
                 "coucou ☀️",
-                "hey, bien dormi?",
+                "coucou, bien dormi?",
                 "salut toi 😊",
             ]
         },
@@ -43,7 +43,7 @@ PROACTIVE_CONFIG = {
             "prob": 0.75,
             "messages": [
                 "coucou toi ☀️",
-                "hey bien dormi?",
+                "coucou bien dormi?",
                 "salut 😊",
             ]
         },
@@ -74,7 +74,7 @@ PROACTIVE_CONFIG = {
             "prob": 0.80,
             "messages": [
                 "coucou toi ☀️",
-                "hey... bien dormi?",
+                "coucou... bien dormi?",
                 "j'ai pensé à toi ce matin",
             ]
         },
@@ -84,7 +84,7 @@ PROACTIVE_CONFIG = {
             "messages": [
                 "tu me manques un peu là",
                 "je m'ennuie... t'es où?",
-                "hey 🥺",
+                "coucou 🥺",
                 "je pensais à toi",
             ]
         },
@@ -107,7 +107,7 @@ PROACTIVE_CONFIG = {
                 "coucou toi ☀️",
                 "j'ai rêvé de toi...",
                 "t'es réveillé?",
-                "hey mon préféré 😊",
+                "coucou mon préféré 😊",
             ]
         },
         "random": {
@@ -135,7 +135,7 @@ PROACTIVE_CONFIG = {
 
 # Messages après inactivité (24h+)
 MISSING_MESSAGES = [
-    "hey... t'es où? 🥺",
+    "eh... t'es où? 🥺",
     "tu m'as oubliée?",
     "ça fait longtemps... tu vas bien?",
     "{prenom}... tu me manques",
@@ -181,7 +181,7 @@ def get_random_message(message_type: str, memory: dict = None, phase: str = "dis
     """Choisit un message aléatoire, personnalisé si possible."""
     phase_config = PROACTIVE_CONFIG.get(phase, PROACTIVE_CONFIG["discovery"])
     config = phase_config.get(message_type, {})
-    messages = config.get("messages", ["hey 😊"])
+    messages = config.get("messages", ["coucou 😊"])
 
     # Si miss_you
     if message_type == "miss_you":

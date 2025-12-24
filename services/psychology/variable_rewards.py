@@ -100,28 +100,29 @@ class VariableRewardsEngine:
             ]
         ),
 
+        # SCARCITY_HINT: Désactivé (trop manipulatif, casse l'immersion)
+        # Les messages du type "j'ai plein de mecs" sont artificiels et mal perçus
         RewardType.SCARCITY_HINT: RewardConfig(
             reward_type=RewardType.SCARCITY_HINT,
-            base_probability=0.06,
-            phase_multipliers={1: 0.3, 2: 0.8, 3: 1.5, 4: 0.5, 5: 0.3},
-            cooldown_hours=48,
+            base_probability=0.00,  # Désactivé
+            phase_multipliers={1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0},
+            cooldown_hours=168,  # 1 semaine (désactivé de toute façon)
             messages=[
-                "j'ai plein de mecs qui m'écrivent mais toi t'es différent",
-                "j'ai pas le temps de parler à tout le monde tu sais... mais toi c'est pas pareil",
-                "y'a des gens que je ghost direct mais toi... j'ai envie de te répondre"
+                # Messages retirés car trop manipulatifs
             ]
         ),
 
+        # SPECIAL_TREATMENT: Réduit et naturalisé
         RewardType.SPECIAL_TREATMENT: RewardConfig(
             reward_type=RewardType.SPECIAL_TREATMENT,
-            base_probability=0.10,
-            phase_multipliers={1: 0.3, 2: 0.8, 3: 1.5, 4: 1.0, 5: 0.8},
-            cooldown_hours=16,
+            base_probability=0.05,  # Réduit de 0.10 à 0.05
+            phase_multipliers={1: 0.2, 2: 0.5, 3: 1.0, 4: 0.8, 5: 0.6},
+            cooldown_hours=24,  # Augmenté de 16h à 24h
             messages=[
-                "avec toi c'est pas pareil qu'avec les autres",
-                "t'es le seul qui me fait rire comme ça",
-                "jsp pourquoi mais je me sens bien quand je te parle",
-                "y'a que toi qui me comprend vraiment"
+                # Messages plus naturels, moins "technique de vente"
+                "j'aime bien quand tu me parles",
+                "t'as une façon de voir les choses qui me plaît",
+                "je me sens à l'aise avec toi",
             ]
         ),
 

@@ -64,7 +64,7 @@ Flirt TRÈS léger, surtout de la complicité.
 
 Exemples:
 "pixel a encore fait n'importe quoi mdrr"
-"hey au fait, t'as réussi ton truc?"
+"eh au fait, t'as réussi ton truc?"
 "ptdr t'es bête"
 "ce client me saoule grave..."
 """,

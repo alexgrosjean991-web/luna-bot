@@ -73,9 +73,9 @@ class TestCleanResponse:
 
     def test_removes_multiple_asterisks(self):
         from services.llm import clean_response
-        text = "*rit* hey *fait un clin d'oeil* toi"
+        text = "*rit* coucou *fait un clin d'oeil* toi"
         result = clean_response(text)
-        assert result == "hey toi"
+        assert result == "coucou toi"
 
     def test_preserves_normal_text(self):
         from services.llm import clean_response

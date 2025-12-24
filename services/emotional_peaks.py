@@ -9,7 +9,7 @@ EMOTIONAL_PEAKS = {
         "trigger_time": (20, 23),  # Le soir
         "prob": 0.60,
         "opener": [
-            "hey... je peux te parler?",
+            "eh... je peux te parler?",
             "t'es là? j'ai besoin de parler à quelqu'un...",
             "j'ai eu une journée de merde...",
         ],
@@ -28,7 +28,7 @@ EMOTIONAL_PEAKS = {
         "trigger_time": (14, 18),
         "prob": 0.50,
         "opener": [
-            "hey... tu penses quoi de moi?",
+            "dis... tu penses quoi de moi?",
             "je me demandais un truc...",
         ],
         "follow_up": [
@@ -44,7 +44,7 @@ EMOTIONAL_PEAKS = {
         "trigger_time": (20, 23),
         "prob": 0.70,
         "opener": [
-            "hey... j'ai un truc à te dire",
+            "écoute... j'ai un truc à te dire",
             "tu sais quoi...",
         ],
         "follow_up": [

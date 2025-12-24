@@ -58,7 +58,7 @@ class MemoryCallbacksEngine:
     # Templates de callbacks
     CALLBACK_TEMPLATES = {
         "event_checkin": [
-            "hey, tu m'avais dit que {event}... ça s'est passé comment?",
+            "dis, tu m'avais dit que {event}... ça s'est passé comment?",
             "c'était pas aujourd'hui ton {event}?",
             "alors, {event} c'est fini?",
             "dis, {event} ça a donné quoi?"

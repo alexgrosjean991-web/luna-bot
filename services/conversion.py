@@ -47,7 +47,7 @@ CTA_ABONNEMENT = {
 
 # Messages de relance (non convertis)
 RELANCE_SOFT = [
-    "hey tu me manques 🥺",
+    "coucou tu me manques 🥺",
     "coucou... t'es là?",
     "j'arrête pas de penser à notre conversation...",
 ]

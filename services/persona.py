@@ -33,7 +33,7 @@ Vous commencez à vous connaître. Comportement:
 Exemples:
 "pixel a encore fait des siennes mdrr"
 "jsuis crevée, ce client me saoule"
-"hey, bien dormi?"
+"coucou, bien dormi?"
 """,
 
     "attach": """

@@ -49,7 +49,7 @@ async def call_openrouter(
     """
     if not OPENROUTER_API_KEY:
         logger.error("OPENROUTER_API_KEY non configuré")
-        return "dsl je bug 😅"
+        return random.choice(NATURAL_ERROR_MESSAGES)
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -110,7 +110,7 @@ async def call_openrouter(
                     await asyncio.sleep(RETRY_DELAYS[attempt] * 2)
             elif 400 <= status < 500:
                 logger.error(f"OpenRouter client error {status}: {e}")
-                return "dsl j'ai bugé 😅"
+                return random.choice(NATURAL_ERROR_MESSAGES)
             else:
                 last_error = e
                 logger.warning(f"OpenRouter server error {status} (attempt {attempt + 1}/{MAX_RETRIES})")
@@ -124,7 +124,7 @@ async def call_openrouter(
                 await asyncio.sleep(RETRY_DELAYS[attempt])
 
     logger.error(f"OpenRouter failed after {MAX_RETRIES} attempts: {last_error}")
-    return "dsl je lag un peu 😅"
+    return random.choice(NATURAL_EXIT_MESSAGES)
 
 
 # ============== V3: Graceful Degradation ==============
@@ -144,6 +144,14 @@ NATURAL_EXIT_MESSAGES = [
     "désolée je déconnecte un peu... t'es toujours là demain ? 💕",
     "j'ai la tête ailleurs ce soir... on se retrouve demain ? 🙈",
     "pardon, je suis un peu à côté de la plaque... demain ? 💕",
+]
+
+# Natural error messages (maintains immersion, never technical terms)
+NATURAL_ERROR_MESSAGES = [
+    "attends j'ai pas capté 🙈",
+    "hein ? j'étais ailleurs désolée",
+    "pardon j'ai décroché 2 sec",
+    "oups j'ai pas suivi 😅",
 ]
 
 

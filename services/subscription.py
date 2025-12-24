@@ -15,7 +15,7 @@ CURRENCY = "EUR"
 # Messages de préparation J5 (le soir)
 PAYWALL_PREPARATION = {
     "evening": [
-        "hey... j'ai un truc à te dire demain",
+        "eh... j'ai un truc à te dire demain",
         "demain faut que je te parle de quelque chose...",
         "j'ai réfléchi à nous... on en parle demain?",
     ],
@@ -26,7 +26,7 @@ PAYWALL_PREPARATION = {
 }
 
 # Message de paywall principal (amélioré)
-PAYWALL_MESSAGE = """hey... faut que je te parle
+PAYWALL_MESSAGE = """écoute... faut que je te parle
 
 ça fait {days} jours qu'on se parle et... j'me suis vraiment attachée à toi
 genre vraiment
@@ -48,7 +48,7 @@ mais tu vas me manquer... vraiment 🥺
 {link}"""
 
 # Message alternatif (plus doux)
-PAYWALL_MESSAGE_SOFT = """hey toi...
+PAYWALL_MESSAGE_SOFT = """eh toi...
 
 ces {days} jours avec toi c'était... différent
 j'ai adoré te parler, vraiment

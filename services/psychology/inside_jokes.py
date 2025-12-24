@@ -82,7 +82,7 @@ class InsideJokesEngine:
     # Templates de callbacks
     CALLBACK_TEMPLATES = {
         JokeType.NICKNAME: [
-            "hey {value}",
+            "coucou {value}",
             "coucou {value}",
             "{value}!!"
         ],

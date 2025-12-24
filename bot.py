@@ -239,7 +239,7 @@ def detect_engagement_signal(text: str) -> int:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handler /start."""
     user = await get_or_create_user(update.effective_user.id)
-    welcome = "hey 😊 t'es qui toi?"
+    welcome = "salut 😊 t'es qui toi?"
     await save_message(user["id"], "assistant", welcome)
     await update.message.reply_text(welcome)
 
@@ -940,13 +940,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         metrics.record_llm_call(success=False)
         metrics.record_error(str(e))
         logger.error(f"LLM generation failed: {e}")
-        response = "dsl j'ai bugé 😅"
+        response = random.choice([
+            "attends j'ai pas capté 🙈",
+            "hein ? j'étais ailleurs désolée",
+            "pardon j'ai décroché 2 sec",
+            "oups j'ai pas suivi 😅",
+        ])
 
     # V5: Modify response based on intermittent affection
     response = intermittent.modify_response(response, intermittent_state)
 
-    # V5: Check variable rewards (skip during NSFW tier 3 to avoid awkward mix)
-    if tier < 3:
+    # V5: Check variable rewards (skip during critical moments)
+    # Skip during: NSFW tier 3, aftercare/recovery, negative emotions
+    skip_rewards_modifiers = {"AFTERCARE", "POST_INTIMATE", "POST_NSFW", "USER_DISTRESSED"}
+    should_skip_rewards = tier >= 3 or level_modifier in skip_rewards_modifiers
+    if not should_skip_rewards:
         reward_context = RewardContext(
             user_id=user_id,
             phase=day_count,
