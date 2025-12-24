@@ -38,6 +38,8 @@ Retourne UNIQUEMENT un JSON avec les infos de L'UTILISATEUR:
 RÈGLES CRITIQUES:
 - IGNORER: chat Pixel, graphiste freelance, Paris 11ème = c'est LUNA, pas l'utilisateur
 - EXTRAIRE: seulement ce que USER dit explicitement sur lui-même
+- PRÉNOM: cherche patterns "moi c'est X", "je m'appelle X", "appelle-moi X", "c'est X ici"
+- PRÉNOM: si Luna utilise un prénom pour s'adresser à l'utilisateur, c'est son prénom
 - Ne pas inventer, ne pas confondre Luna avec l'utilisateur
 - Retourner UNIQUEMENT le JSON"""
 

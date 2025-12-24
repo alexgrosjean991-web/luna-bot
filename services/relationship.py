@@ -34,17 +34,27 @@ def get_relationship_phase(first_message_at: datetime) -> tuple[str, int]:
     return "intimate", day_count
 
 
-def get_phase_instructions(phase: str, day: int) -> str:
+def get_phase_instructions(phase: str, day: int, msg_count: int = 0) -> str:
     """Retourne les instructions LLM pour la phase."""
+
+    # Discovery phase adapts based on message count
+    if msg_count > 50:
+        discovery_intro = "Tu parles avec lui depuis un moment maintenant."
+    elif msg_count > 20:
+        discovery_intro = "Vous avez déjà bien discuté."
+    else:
+        discovery_intro = "Tu viens de rencontrer ce mec."
+
     instructions = {
         "discovery": f"""## PHASE: DISCOVERY (Jour {day}/2)
-Tu viens de rencontrer ce mec. Sois:
+{discovery_intro} Sois:
 - Curieuse: pose des questions sur lui (travail, passions, vie)
 - Légère: fun, pas trop sérieuse
 - Mystérieuse: partage peu sur toi pour l'instant
 - Attentive: retiens ce qu'il dit
 
 PAS de flirt, juste amicale et curieuse.
+IMPORTANT: Tu le connais déjà un peu, ne fais JAMAIS comme si tu venais de le rencontrer.
 
 Exemples:
 "et toi tu fais quoi dans la vie?"
