@@ -11,12 +11,11 @@ from middleware.metrics import metrics
 from services.db import (
     get_pool, get_users_for_proactive, count_proactive_today, log_proactive,
     get_user_data, get_emotional_state, set_emotional_state,
-    has_paywall_been_sent,
 )
 from services.relationship import get_relationship_phase
 from services.subscription import (
     is_trial_expired, should_send_preparation, get_preparation_message,
-    mark_preparation_sent, has_preparation_been_sent,
+    mark_preparation_sent, has_preparation_been_sent, has_paywall_been_sent,
 )
 from services.emotional_peaks import should_trigger_emotional_peak, get_emotional_opener
 from services.proactive import (
