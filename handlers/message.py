@@ -116,7 +116,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     last_msg_time = await get_last_message_time(user_id)
     hours_since_last = 0
     if last_msg_time:
-        hours_since_last = (datetime.now(last_msg_time.tzinfo or None) - last_msg_time).total_seconds() / 3600
+        # Ensure timezone is set for proper comparison
+        if last_msg_time.tzinfo is None:
+            last_msg_time = last_msg_time.replace(tzinfo=PARIS_TZ)
+        hours_since_last = (datetime.now(PARIS_TZ) - last_msg_time).total_seconds() / 3600
 
     await update_last_active(user_id)
     await set_last_message_time(user_id)
@@ -286,9 +289,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Calculate hours since climax
     hours_since_climax = 999.0
     if last_climax_at:
+        # Use PARIS_TZ consistently for timezone handling
         if last_climax_at.tzinfo is None:
-            last_climax_at = last_climax_at.replace(tzinfo=timezone.utc)
-        hours_since_climax = (datetime.now(last_climax_at.tzinfo) - last_climax_at).total_seconds() / 3600
+            last_climax_at = last_climax_at.replace(tzinfo=PARIS_TZ)
+        hours_since_climax = (datetime.now(PARIS_TZ) - last_climax_at).total_seconds() / 3600
 
     # Check if mood should be updated (every 2-4 hours)
     if luna_mood_engine.should_update_mood(mood_updated_at):

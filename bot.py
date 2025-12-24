@@ -13,7 +13,12 @@ import sys
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
-from settings import TELEGRAM_BOT_TOKEN
+from settings import (
+    TELEGRAM_BOT_TOKEN,
+    JOB_PROACTIVE_INTERVAL, JOB_PROACTIVE_FIRST,
+    JOB_WINBACK_INTERVAL, JOB_WINBACK_FIRST,
+    JOB_CHURN_INTERVAL, JOB_CHURN_FIRST,
+)
 from services.db import init_db, close_db
 from middleware.metrics import JSONFormatter
 
@@ -90,28 +95,28 @@ def main() -> None:
     app.add_handler(CommandHandler("reset", reset_command))   # Admin: reset user
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Jobs proactifs - toutes les 30 minutes
+    # Jobs proactifs - configurable via settings
     job_queue = app.job_queue
     job_queue.run_repeating(
         send_proactive_messages,
-        interval=1800,
-        first=60,
+        interval=JOB_PROACTIVE_INTERVAL,
+        first=JOB_PROACTIVE_FIRST,
         name="proactive_job"
     )
 
-    # Phase C: Win-back - toutes les 2 heures
+    # Phase C: Win-back
     job_queue.run_repeating(
         send_winback_messages,
-        interval=7200,
-        first=300,
+        interval=JOB_WINBACK_INTERVAL,
+        first=JOB_WINBACK_FIRST,
         name="winback_job"
     )
 
-    # Phase C: Churn detection - toutes les heures
+    # Phase C: Churn detection
     job_queue.run_repeating(
         check_churn_risk,
-        interval=3600,
-        first=600,
+        interval=JOB_CHURN_INTERVAL,
+        first=JOB_CHURN_FIRST,
         name="churn_job"
     )
 

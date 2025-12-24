@@ -1,9 +1,12 @@
 """Command handlers for Luna Bot (/start, /health, /debug, /reset)."""
+import logging
 import os
 from datetime import datetime
 
 from telegram import Update
 from telegram.ext import ContextTypes
+
+logger = logging.getLogger(__name__)
 
 from settings import BOT_VERSION, ADMIN_TELEGRAM_ID, PARIS_TZ
 from services.db import (
@@ -20,13 +23,13 @@ HEALTH_FILE = "/tmp/luna_health"
 BOT_START_TIME = datetime.now()
 
 
-def write_health_file():
+def write_health_file() -> None:
     """Ecrit un fichier health pour Docker."""
     try:
         with open(HEALTH_FILE, "w") as f:
             f.write(str(datetime.now().timestamp()))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to write health file: {e}")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

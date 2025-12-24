@@ -131,7 +131,7 @@ async def send_proactive_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         except Exception as e:
             metrics.record_error(f"proactive: {e}")
-            logger.error(f"Error sending proactive to user {user['id']}: {e}")
+            logger.exception(f"Error sending proactive to user {user['id']}")
 
 
 async def send_winback_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -203,7 +203,7 @@ async def send_winback_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         except Exception as e:
             metrics.record_error(f"winback: {e}")
-            logger.error(f"Error sending winback to user {user['id']}: {e}")
+            logger.exception(f"Error sending winback to user {user['id']}")
 
 
 async def check_churn_risk(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -279,4 +279,4 @@ async def check_churn_risk(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         except Exception as e:
             metrics.record_error(f"churn_check: {e}")
-            logger.error(f"Error checking churn for user {user['id']}: {e}")
+            logger.exception(f"Error checking churn for user {user['id']}")

@@ -52,3 +52,11 @@ ADMIN_TELEGRAM_ID = int(os.getenv("ADMIN_TELEGRAM_ID", "0"))
 # DB Pool
 DB_POOL_MIN = 2
 DB_POOL_MAX = 20
+
+# Job intervals (seconds)
+JOB_PROACTIVE_INTERVAL = 1800   # 30 minutes
+JOB_WINBACK_INTERVAL = 7200     # 2 hours
+JOB_CHURN_INTERVAL = 3600       # 1 hour
+JOB_PROACTIVE_FIRST = 60        # First run delay
+JOB_WINBACK_FIRST = 300         # First run delay
+JOB_CHURN_FIRST = 600           # First run delay
