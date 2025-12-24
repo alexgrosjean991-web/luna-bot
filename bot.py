@@ -106,17 +106,23 @@ from services.emotional_peaks import (
 )
 from services.story_arcs import get_story_context
 
-# V7: Transition system
+# V7: Transition system (legacy, kept for compatibility)
 from services.levels import (
     ConversationLevel, EmotionalState, TransitionManager,
     detect_level, detect_climax
 )
 from services.db import (
-    get_transition_state, update_transition_state, start_cooldown
+    get_transition_state, update_transition_state, start_cooldown,
+    # V3: Momentum system
+    get_momentum_state, update_momentum_state, start_climax_recovery,
+    reset_momentum, reset_intimacy_history
 )
 
-# V6: LLM Router + Conversion
-from services.llm_router import get_llm_config, detect_engagement_signal
+# V3: Momentum-based routing
+from services.momentum import momentum_engine, Intensity
+from services.llm_router import get_llm_config_v3, get_llm_config, is_premium_session
+from services.prompt_selector import get_prompt_for_tier, get_tier_name
+from services.llm import call_with_graceful_fallback
 from services import conversion
 from settings import PAYMENT_LINK
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
@@ -305,6 +311,15 @@ async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         memory_str = ", ".join(f"{k}: {v}" for k, v in memory.items() if v) or "vide"
 
+        # V3: Momentum data
+        momentum = user.get('momentum', 0) or 0
+        tier = user.get('current_tier', 1) or 1
+        intimacy = user.get('intimacy_history', 0) or 0
+        msgs_since_climax = user.get('messages_since_climax', 999) or 999
+
+        tier_names = {1: "SFW (Haiku)", 2: "FLIRT (Magnum)", 3: "NSFW (Magnum)"}
+        tier_str = tier_names.get(tier, f"Tier {tier}")
+
         debug_msg = f"""🔍 **Debug User {target_telegram_id}**
 
 📊 **État Général**
@@ -313,11 +328,12 @@ async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 • Phase: {user.get('phase', 'discovery')}
 • Subscription: {user.get('subscription_status', 'trial')}
 
-🎭 **Transitions (V7)**
-• Niveau actuel: {user.get('current_level', 1)} (1=SFW, 2=TENSION, 3=NSFW)
-• Cooldown restant: {user.get('cooldown_remaining', 0)} msgs
+🔥 **Momentum (V3)**
+• Momentum: {momentum:.1f}/100
+• Tier actuel: {tier_str}
+• Intimacy history: {intimacy} sessions NSFW
+• Msgs depuis climax: {msgs_since_climax}
 • Msgs cette session: {user.get('messages_this_session', 0)}
-• Msgs depuis changement: {user.get('messages_since_level_change', 0)}
 
 💕 **Engagement**
 • Teasing stage: {user.get('teasing_stage', 0)}/8
@@ -343,9 +359,11 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Handler /reset - reset l'état d'un user pour tests (admin only).
 
     Usage:
-        /reset              - Reset complet (comme nouveau user)
+        /reset              - Reset momentum (comme nouveau)
+        /reset momentum     - Reset momentum à 0
+        /reset momentum 50  - Set momentum à 50
+        /reset intimacy     - Reset intimacy history
         /reset day 3        - Set à jour 3
-        /reset level 2      - Set niveau TENSION
         /reset teasing 5    - Set teasing stage
         /reset paywall      - Reset paywall
         /reset all          - Full reset (supprime user)
@@ -365,23 +383,42 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         pool = get_pool()
 
         if not args:
-            # Reset transition state only
+            # V3: Reset momentum state
             async with pool.acquire() as conn:
                 await conn.execute("""
                     UPDATE users SET
-                        current_level = 1,
-                        cooldown_remaining = 0,
+                        momentum = 0,
+                        current_tier = 1,
                         messages_this_session = 0,
-                        messages_since_level_change = 0,
+                        messages_since_climax = 999,
                         emotional_state = NULL
                     WHERE telegram_id = $1
                 """, target_telegram_id)
-            await update.message.reply_text(f"✅ Reset transitions pour {target_telegram_id}")
+            await update.message.reply_text(f"✅ Reset momentum pour {target_telegram_id}")
             return
 
         action = args[0].lower()
 
-        if action == "day" and len(args) > 1:
+        if action == "momentum":
+            # Reset or set momentum
+            value = float(args[1]) if len(args) > 1 else 0
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE users SET momentum = $1, messages_this_session = 0 WHERE telegram_id = $2",
+                    value, target_telegram_id
+                )
+            await update.message.reply_text(f"✅ User {target_telegram_id} → Momentum {value:.1f}")
+
+        elif action == "intimacy":
+            # Reset intimacy history
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE users SET intimacy_history = 0, messages_since_climax = 999 WHERE telegram_id = $1",
+                    target_telegram_id
+                )
+            await update.message.reply_text(f"✅ User {target_telegram_id} → Intimacy history reset")
+
+        elif action == "day" and len(args) > 1:
             day = int(args[1])
             from settings import PARIS_TZ
             from datetime import timedelta
@@ -393,15 +430,19 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 )
             await update.message.reply_text(f"✅ User {target_telegram_id} → Jour {day}")
 
-        elif action == "level" and len(args) > 1:
-            level = int(args[1])
+        elif action == "tier" and len(args) > 1:
+            # V3: Set tier directly (for testing)
+            tier = int(args[1])
+            # Set momentum to match tier
+            tier_momentum = {1: 20, 2: 45, 3: 75}
+            momentum = tier_momentum.get(tier, 20)
             async with pool.acquire() as conn:
                 await conn.execute(
-                    "UPDATE users SET current_level = $1, messages_since_level_change = 0 WHERE telegram_id = $2",
-                    level, target_telegram_id
+                    "UPDATE users SET current_tier = $1, momentum = $2 WHERE telegram_id = $3",
+                    tier, momentum, target_telegram_id
                 )
-            level_names = {1: "SFW", 2: "TENSION", 3: "NSFW"}
-            await update.message.reply_text(f"✅ User {target_telegram_id} → Niveau {level_names.get(level, level)}")
+            tier_names = {1: "SFW", 2: "FLIRT", 3: "NSFW"}
+            await update.message.reply_text(f"✅ User {target_telegram_id} → Tier {tier_names.get(tier, tier)} (momentum={momentum})")
 
         elif action == "teasing" and len(args) > 1:
             stage = int(args[1])
@@ -454,12 +495,13 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         else:
             await update.message.reply_text("""❓ Usage:
-/reset - Reset transitions
+/reset - Reset momentum (nouveau)
+/reset momentum 50 - Set momentum
+/reset intimacy - Reset intimacy history
+/reset tier 2 - Set tier FLIRT
 /reset day 3 - Set jour 3
-/reset level 2 - Set TENSION
-/reset teasing 5 - Set teasing
+/reset teasing 5 - Set teasing stage
 /reset paywall - Reset paywall
-/reset cooldown - Reset cooldown
 /reset session - Reset session msgs
 /reset all - Supprimer user""")
 
@@ -553,46 +595,58 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     logger.info(f"User {user_id}: Day={day_count}, Mood={mood}, Jokes={len(existing_jokes)}")
 
-    # V7: Get transition state and detect level
-    transition_state = await get_transition_state(user_id)
-    detected_level, detected_emotion = detect_level(user_text)
+    # ============== V3: MOMENTUM SYSTEM ==============
+    # Get current momentum state
+    momentum_state = await get_momentum_state(user_id)
+    current_momentum = momentum_state["momentum"]
+    intimacy_history = momentum_state["intimacy_history"]
+    messages_since_climax = momentum_state["messages_since_climax"]
+    messages_this_session = momentum_state["messages_this_session"]
 
-    # V7: Decide transition
-    target_level, transition_reason, level_modifier = TransitionManager.decide_transition(
-        current_level=transition_state["current_level"],
-        detected_level=detected_level,
-        emotional_state=detected_emotion,
-        day_count=day_count,
-        messages_this_session=transition_state["messages_this_session"],
-        cooldown_remaining=transition_state["cooldown_remaining"],
-        messages_since_level_change=transition_state["messages_since_level_change"]
+    # Classify message intensity and calculate new momentum
+    new_momentum, intensity, is_negative_emotion = momentum_engine.calculate_momentum(
+        user_text,
+        current_momentum,
+        messages_this_session,
+        day_count
     )
 
-    logger.info(f"V7 Transition: detected={detected_level.name}, target={target_level.name}, reason={transition_reason}")
-
-    # FIX V7: Détecter climax dans le message USER (pas juste Luna)
-    # Check si: niveau actuel >= TENSION OU message détecté comme NSFW
+    # Check for climax in user message
     user_climax = False
-    is_climax_msg = detect_climax(user_text)
-    climax_check = transition_state["current_level"] >= 2 or detected_level >= ConversationLevel.NSFW
-    logger.info(f"V7 Climax check: current_level={transition_state['current_level']}, detected={detected_level}, is_climax={is_climax_msg}, check={climax_check}")
-    if climax_check and is_climax_msg:
+    is_climax_msg = momentum_engine.detect_climax(user_text)
+    if (intensity == Intensity.NSFW or current_momentum > 50) and is_climax_msg:
         user_climax = True
-        target_level = ConversationLevel.SFW
+        new_momentum = momentum_engine.apply_climax_cooldown(new_momentum)
+        logger.info(f"V3: User climax detected, momentum reduced to {new_momentum:.1f}")
+
+    # Determine modifier based on state
+    level_modifier = None
+
+    # 1. Check emotional distress first
+    if is_negative_emotion:
+        level_modifier = "USER_DISTRESSED"
+        logger.info("V3: Negative emotion detected, applying USER_DISTRESSED")
+
+    # 2. Check recovery phase (after climax)
+    elif user_climax:
         level_modifier = "AFTERCARE"
-        logger.info(f"V7: User climax detected, will start AFTERCARE cooldown")
+        messages_since_climax = 0  # Will be set after response
+    elif messages_since_climax <= 3:
+        level_modifier = momentum_engine.get_recovery_modifier(messages_since_climax)
+        if level_modifier:
+            logger.info(f"V3: Recovery phase, applying {level_modifier}")
 
-    # FIX V7: Désescalade naturelle NSFW → SFW/TENSION (sans climax)
-    if not user_climax and transition_state["current_level"] == 3 and target_level < 3:
-        if level_modifier is None:  # Pas déjà un modifier (AFTERCARE, etc.)
-            level_modifier = "POST_NSFW"
-            logger.info(f"V7: Natural de-escalation from NSFW, applying POST_NSFW")
+    # 3. Apply soft caps based on phase
+    elif not level_modifier:
+        soft_cap = momentum_engine.apply_soft_cap(intensity, day_count, messages_this_session, new_momentum)
+        if soft_cap.modifier:
+            level_modifier = soft_cap.modifier
+            logger.info(f"V3: Soft cap applied: {soft_cap.modifier}")
 
-    # FIX V7: NSFW détecté mais règles bloquent → NSFW_TEASE (pas de rejet!)
-    if detected_level >= ConversationLevel.NSFW and target_level < ConversationLevel.NSFW:
-        if level_modifier is None:  # Pas déjà AFTERCARE, etc.
-            level_modifier = "NSFW_TEASE"
-            logger.info(f"V7: NSFW detected but capped at {target_level.name}, using NSFW_TEASE")
+    # Get tier based on momentum
+    tier = momentum_engine.get_tier(new_momentum, day_count, intimacy_history)
+
+    logger.info(f"V3 Momentum: {current_momentum:.1f} → {new_momentum:.1f}, intensity={intensity.value}, tier={tier}")
 
     # 11. Progress emotional state if user responded
     if emotional_state == "opener":
@@ -658,20 +712,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 await update_inside_jokes(user_id, [j.to_dict() for j in existing_jokes])
                 break
 
-    # ============== V6: LLM Router ==============
+    # ============== V3: LLM Router (Tier-based) ==============
     teasing_stage = user_data.get("teasing_stage", 0)
     subscription_status = user_data.get("subscription_status", "trial")
-    # FIX V7: Passer le niveau, le modifier ET detected_level pour router vers Magnum
-    provider, model = get_llm_config(
-        day_count, teasing_stage, subscription_status,
-        current_level=int(target_level),
-        level_modifier=level_modifier,
-        detected_level=int(detected_level)
+
+    # V3: Get provider and model based on momentum and tier
+    provider, model, final_tier = get_llm_config_v3(
+        momentum=new_momentum,
+        day_count=day_count,
+        intimacy_history=intimacy_history,
+        subscription_status=subscription_status,
+        detected_intensity=intensity,
+        modifier=level_modifier
     )
+
+    logger.info(f"V3 Router: provider={provider}, tier={final_tier}, modifier={level_modifier}")
 
     # V6: Track premium preview + check if conversion needed AFTER response
     show_conversion_after = False
-    if provider == "openrouter" and subscription_status != "active":
+    if is_premium_session(provider) and subscription_status != "active":
         preview_count = await conversion.increment_preview_count(user_id)
         logger.info(f"Premium preview count: {preview_count}")
 
@@ -681,15 +740,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         ):
             show_conversion_after = True
 
-    # 13. Générer réponse
+    # V3: Build system prompt based on tier
+    system_prompt = get_prompt_for_tier(final_tier, level_modifier)
+
+    # 13. Générer réponse avec graceful fallback
     try:
-        response = await generate_response(
-            user_text, history, memory, phase, day_count, mood, emotional_state,
-            extra_instructions="\n".join(extra_instructions) if extra_instructions else None,
+        # Build messages for LLM
+        messages = history.copy()
+        messages.append({"role": "user", "content": user_text})
+
+        # Add context to prompt
+        from services.memory import format_memory_for_prompt
+        from services.relationship import get_phase_instructions
+        from services.mood import get_mood_instructions, get_mood_context
+
+        prompt_parts = [system_prompt]
+        if memory:
+            prompt_parts.append(f"\n## CE QUE TU SAIS SUR LUI:\n{format_memory_for_prompt(memory)}")
+        prompt_parts.append(get_phase_instructions(phase, day_count))
+        prompt_parts.append(f"\n## TON HUMEUR:\n{get_mood_instructions(mood)}")
+        if extra_instructions:
+            prompt_parts.append(f"\n## INSTRUCTIONS:\n" + "\n".join(extra_instructions))
+
+        full_prompt = "\n".join(prompt_parts)
+
+        # Call with graceful fallback
+        response = await call_with_graceful_fallback(
+            messages=messages,
+            system_prompt=full_prompt,
             provider=provider,
-            model_override=model,
-            level=int(target_level),
-            level_modifier=level_modifier
+            model=model,
+            tier=final_tier
         )
         metrics.record_llm_call(success=True)
     except Exception as e:
@@ -730,28 +811,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     logger.info(f"[Luna] {response}")
 
-    # V7: Check for climax in Luna's response (si pas déjà triggered par user)
+    # V3: Check for climax in Luna's response
     luna_climax = False
-    if not user_climax and target_level == ConversationLevel.NSFW and detect_climax(response):
+    if not user_climax and final_tier >= 3 and momentum_engine.detect_climax(response):
         luna_climax = True
-        logger.info(f"V7: Luna climax detected")
+        new_momentum = momentum_engine.apply_climax_cooldown(new_momentum)
+        logger.info(f"V3: Luna climax detected, momentum reduced to {new_momentum:.1f}")
 
-    # V7: Update transition state
-    level_changed = int(target_level) != transition_state["current_level"]
-
-    # Calculer le cooldown: si climax (user ou Luna), set à COOLDOWN_MESSAGES, sinon décrémenter
+    # V3: Update momentum state
     if user_climax or luna_climax:
-        new_cooldown = TransitionManager.COOLDOWN_MESSAGES
+        # Start climax recovery (increments intimacy_history)
+        await start_climax_recovery(user_id, new_momentum)
+        logger.info(f"V3: Climax recovery started, intimacy_history incremented")
     else:
-        new_cooldown = max(0, transition_state["cooldown_remaining"] - 1)
-
-    await update_transition_state(
-        user_id=user_id,
-        current_level=int(target_level),
-        messages_this_session=transition_state["messages_this_session"] + 1,
-        messages_since_level_change=0 if level_changed else transition_state["messages_since_level_change"] + 1,
-        cooldown_remaining=new_cooldown
-    )
+        # Normal momentum update
+        await update_momentum_state(
+            user_id=user_id,
+            momentum=new_momentum,
+            tier=final_tier,
+            messages_this_session=messages_this_session + 1
+        )
 
     # 16. Extraction mémoire périodique
     if msg_count % MEMORY_EXTRACTION_INTERVAL == 0:

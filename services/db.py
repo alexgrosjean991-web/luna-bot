@@ -183,6 +183,24 @@ async def init_db() -> None:
             last_climax_at TIMESTAMP WITH TIME ZONE DEFAULT NULL
         """)
 
+        # V3: Colonnes pour momentum system
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            momentum FLOAT DEFAULT 0
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            intimacy_history INT DEFAULT 0
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            messages_since_climax INT DEFAULT 999
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            current_tier INT DEFAULT 1
+        """)
+
     logger.info("DB connectée")
 
 
@@ -623,3 +641,117 @@ async def start_cooldown(user_id: int, cooldown_messages: int = 5) -> None:
                 current_level = 1
             WHERE id = $1
         """, user_id, cooldown_messages)
+
+
+# ============== V3: Momentum system functions ==============
+
+async def init_momentum_columns() -> None:
+    """Ajoute les colonnes momentum (appelé dans init_db)."""
+    async with get_pool().acquire() as conn:
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            momentum FLOAT DEFAULT 0
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            intimacy_history INT DEFAULT 0
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            messages_since_climax INT DEFAULT 999
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            current_tier INT DEFAULT 1
+        """)
+
+
+async def get_momentum_state(user_id: int) -> dict:
+    """Récupère l'état momentum pour un user."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT momentum, intimacy_history, messages_since_climax,
+                   current_tier, messages_this_session
+            FROM users WHERE id = $1
+        """, user_id)
+
+        if not row:
+            return {
+                "momentum": 0.0,
+                "intimacy_history": 0,
+                "messages_since_climax": 999,
+                "current_tier": 1,
+                "messages_this_session": 0,
+            }
+
+        return {
+            "momentum": float(row["momentum"] or 0),
+            "intimacy_history": row["intimacy_history"] or 0,
+            "messages_since_climax": row["messages_since_climax"] or 999,
+            "current_tier": row["current_tier"] or 1,
+            "messages_this_session": row["messages_this_session"] or 0,
+        }
+
+
+async def update_momentum_state(
+    user_id: int,
+    momentum: float,
+    tier: int,
+    messages_this_session: int,
+    messages_since_climax: int | None = None
+) -> None:
+    """Met à jour l'état momentum."""
+    async with get_pool().acquire() as conn:
+        if messages_since_climax is not None:
+            await conn.execute("""
+                UPDATE users SET
+                    momentum = $2,
+                    current_tier = $3,
+                    messages_this_session = $4,
+                    messages_since_climax = $5
+                WHERE id = $1
+            """, user_id, momentum, tier, messages_this_session, messages_since_climax)
+        else:
+            await conn.execute("""
+                UPDATE users SET
+                    momentum = $2,
+                    current_tier = $3,
+                    messages_this_session = $4,
+                    messages_since_climax = messages_since_climax + 1
+                WHERE id = $1
+            """, user_id, momentum, tier, messages_this_session)
+
+
+async def start_climax_recovery(user_id: int, new_momentum: float) -> None:
+    """Démarre la phase de recovery après climax."""
+    async with get_pool().acquire() as conn:
+        await conn.execute("""
+            UPDATE users SET
+                momentum = $2,
+                messages_since_climax = 0,
+                last_climax_at = NOW(),
+                intimacy_history = intimacy_history + 1
+            WHERE id = $1
+        """, user_id, new_momentum)
+
+
+async def reset_momentum(user_id: int) -> None:
+    """Reset le momentum (pour /reset momentum)."""
+    async with get_pool().acquire() as conn:
+        await conn.execute("""
+            UPDATE users SET
+                momentum = 0,
+                current_tier = 1,
+                messages_since_climax = 999
+            WHERE id = $1
+        """, user_id)
+
+
+async def reset_intimacy_history(user_id: int) -> None:
+    """Reset l'historique d'intimité (pour /reset intimacy)."""
+    async with get_pool().acquire() as conn:
+        await conn.execute("""
+            UPDATE users SET
+                intimacy_history = 0
+            WHERE id = $1
+        """, user_id)

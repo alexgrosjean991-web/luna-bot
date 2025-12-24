@@ -1,6 +1,6 @@
 """
 Système de niveaux de conversation Luna.
-Version simplifiée: 3 niveaux + cooldown.
+V3: Simplifié - garde detect_level pour compatibilité, momentum.py gère les transitions.
 """
 
 from enum import IntEnum
@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class ConversationLevel(IntEnum):
-    """Niveaux de conversation."""
+    """Niveaux de conversation (legacy, gardé pour compatibilité)."""
     SFW = 1      # Normal, flirt léger
     TENSION = 2  # Build-up, sous-entendus
     NSFW = 3     # Explicite
@@ -25,6 +25,7 @@ class EmotionalState(IntEnum):
 
 
 # ============== PATTERNS DE DÉTECTION ==============
+# Note: Ces patterns sont aussi dans momentum.py, gardés ici pour legacy
 
 NSFW_KEYWORDS = [
     'baise', 'suce', 'bite', 'chatte', 'jouir', 'jouis', 'orgasme',
@@ -73,6 +74,7 @@ NEGATIVE_EMOTION_PATTERNS = [
 def detect_level(message: str) -> tuple[ConversationLevel, EmotionalState]:
     """
     Détecte le niveau de conversation et l'état émotionnel.
+    LEGACY: Utilisé pour compatibilité, préférer momentum.classify_intensity()
 
     Returns:
         (ConversationLevel, EmotionalState)
@@ -121,16 +123,20 @@ def detect_climax(message: str) -> bool:
     return any(re.search(p, msg_lower) for p in patterns)
 
 
-# ============== GESTIONNAIRE DE TRANSITIONS ==============
+# ============== LEGACY: TransitionManager (DEPRECATED) ==============
+# Gardé pour compatibilité pendant la migration
+# V3 utilise momentum.py à la place
 
 class TransitionManager:
-    """Gère les transitions entre niveaux."""
+    """
+    DEPRECATED: Utilisez momentum.py à la place.
+    Gardé pour compatibilité pendant la migration.
+    """
 
-    # Config
-    MIN_MESSAGES_BEFORE_NSFW = 5       # Messages minimum avant NSFW
-    MIN_DAYS_BEFORE_NSFW = 3           # Jours minimum avant NSFW
-    COOLDOWN_MESSAGES = 5              # Messages de cooldown après NSFW
-    MESSAGES_BETWEEN_LEVELS = 2        # Messages entre changements de niveau
+    MIN_MESSAGES_BEFORE_NSFW = 5
+    MIN_DAYS_BEFORE_NSFW = 3
+    COOLDOWN_MESSAGES = 5
+    MESSAGES_BETWEEN_LEVELS = 2
 
     @staticmethod
     def decide_transition(
@@ -143,65 +149,31 @@ class TransitionManager:
         messages_since_level_change: int
     ) -> tuple[ConversationLevel, str, str | None]:
         """
-        Décide de la transition à effectuer.
-
-        Returns:
-            (target_level, reason, prompt_modifier)
+        DEPRECATED: Cette méthode est gardée pour compatibilité.
+        V3 utilise momentum.apply_soft_cap() à la place.
         """
-        # RÈGLE 1: Émotion négative → bloquer escalade
+        logger.warning("TransitionManager.decide_transition is DEPRECATED, use momentum.py")
+
+        # Émotion négative → bloquer escalade
         if emotional_state == EmotionalState.NEGATIVE:
-            return (
-                ConversationLevel.SFW,
-                "emotional_block",
-                "USER_DISTRESSED"
-            )
+            return (ConversationLevel.SFW, "emotional_block", "USER_DISTRESSED")
 
-        # RÈGLE 2: En cooldown → forcer SFW
+        # En cooldown → forcer SFW
         if cooldown_remaining > 0:
-            return (
-                ConversationLevel.SFW,
-                "in_cooldown",
-                "AFTERCARE"
-            )
+            return (ConversationLevel.SFW, "in_cooldown", "AFTERCARE")
 
-        # RÈGLE 3: Trop tôt (avant jour 3) → max TENSION
+        # Trop tôt (avant jour 3) → max TENSION
         if day_count < TransitionManager.MIN_DAYS_BEFORE_NSFW:
             if detected_level >= ConversationLevel.NSFW:
-                return (
-                    ConversationLevel.TENSION,
-                    "too_early",
-                    "DELAY_GRATIFICATION"
-                )
+                return (ConversationLevel.TENSION, "too_early", "NSFW_TEASE")
 
-        # RÈGLE 4: Pas assez de messages en session → max TENSION
+        # Pas assez de messages en session → max TENSION
         if detected_level >= ConversationLevel.NSFW:
             if messages_this_session < TransitionManager.MIN_MESSAGES_BEFORE_NSFW:
-                return (
-                    ConversationLevel.TENSION,
-                    "session_too_short",
-                    "BUILD_TENSION"
-                )
+                return (ConversationLevel.TENSION, "session_too_short", "NSFW_TEASE")
 
-        # RÈGLE 5: Trop rapide entre niveaux → garder actuel
-        if detected_level > current_level:
-            if messages_since_level_change < TransitionManager.MESSAGES_BETWEEN_LEVELS:
-                return (
-                    ConversationLevel(current_level),
-                    "too_fast",
-                    "BUILD_TENSION"
-                )
-
-        # RÈGLE 6: Max +1 niveau par transition
+        # Max +1 niveau par transition
         if detected_level > current_level + 1:
-            return (
-                ConversationLevel(current_level + 1),
-                "gradual_escalation",
-                None
-            )
+            return (ConversationLevel(current_level + 1), "gradual_escalation", None)
 
-        # OK: suivre le niveau détecté
-        return (
-            detected_level,
-            "user_lead",
-            None
-        )
+        return (detected_level, "user_lead", None)

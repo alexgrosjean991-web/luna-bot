@@ -1,6 +1,7 @@
 """Client LLM multi-provider (Anthropic + OpenRouter) avec contexte mood/phase/story/peaks."""
 import re
 import asyncio
+import random
 import logging
 import httpx
 from pathlib import Path
@@ -131,6 +132,97 @@ async def call_openrouter(
 
     logger.error(f"OpenRouter failed after {MAX_RETRIES} attempts: {last_error}")
     return "dsl je lag un peu 😅"
+
+
+# ============== V3: Graceful Degradation ==============
+
+# Soft sensual prompt for Haiku fallback (suggestive but not explicit)
+SOFT_SENSUAL_INSTRUCTION = """
+
+## INSTRUCTION SPÉCIALE (Fallback)
+Tu peux être sensuelle et suggestive. Décris les sensations et émotions
+sans être graphiquement explicite. Reste dans l'implicite et le ressenti.
+Exemples: "j'ai chaud rien qu'en y pensant", "tu me fais un effet..."
+"""
+
+# Natural exit messages when all LLMs fail
+NATURAL_EXIT_MESSAGES = [
+    "mmh... je suis un peu fatiguée là... on reprend demain ? 😴💕",
+    "désolée je déconnecte un peu... t'es toujours là demain ? 💕",
+    "j'ai la tête ailleurs ce soir... on se retrouve demain ? 🙈",
+    "pardon, je suis un peu à côté de la plaque... demain ? 💕",
+]
+
+
+async def call_anthropic_direct(
+    messages: list[dict],
+    system_prompt: str,
+    max_tokens: int = MAX_TOKENS,
+    temperature: float = 0.8
+) -> str:
+    """Direct Anthropic API call for fallback."""
+    headers = {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": ANTHROPIC_API_VERSION,
+        "content-type": "application/json"
+    }
+
+    payload = {
+        "model": LLM_MODEL,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "system": system_prompt,
+        "messages": messages[-20:]
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(ANTHROPIC_URL, headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            return clean_response(data["content"][0]["text"])
+    except Exception as e:
+        logger.error(f"Anthropic fallback failed: {e}")
+        raise
+
+
+async def call_with_graceful_fallback(
+    messages: list[dict],
+    system_prompt: str,
+    provider: str,
+    model: str,
+    tier: int,
+    max_tokens: int = MAX_TOKENS_PREMIUM
+) -> str:
+    """
+    Call LLM with graceful degradation fallback chain.
+
+    Fallback chain:
+    1. Primary call (Magnum or Haiku based on tier)
+    2. If Magnum fails: Haiku + soft sensual prompt
+    3. If all fail: Natural Luna exit message
+    """
+    # Primary call
+    try:
+        if provider == "openrouter":
+            return await call_openrouter(messages, system_prompt, model, max_tokens)
+        else:
+            return await call_anthropic_direct(messages, system_prompt, MAX_TOKENS)
+    except Exception as e:
+        logger.warning(f"Primary LLM call failed: {e}")
+
+    # Fallback 1: If was Magnum, try Haiku with soft prompt
+    if provider == "openrouter" and tier >= 2:
+        logger.info("Fallback: Trying Haiku with soft sensual prompt")
+        try:
+            soft_prompt = system_prompt + SOFT_SENSUAL_INSTRUCTION
+            return await call_anthropic_direct(messages, soft_prompt, MAX_TOKENS)
+        except Exception as e:
+            logger.warning(f"Haiku fallback failed: {e}")
+
+    # Fallback 2: Natural exit message
+    logger.error("All LLM calls failed, using natural exit")
+    return random.choice(NATURAL_EXIT_MESSAGES)
 
 
 async def generate_response(
