@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from dataclasses import dataclass
 from enum import Enum
 
+from settings import PARIS_TZ
+
 logger = logging.getLogger(__name__)
 
 # Time-based decay constants
@@ -201,10 +203,10 @@ class MomentumEngine:
         if not last_message_at or current_momentum <= 0:
             return current_momentum
 
-        # Calculate elapsed time
-        now = datetime.now(timezone.utc)
+        # Calculate elapsed time (use PARIS_TZ consistently)
+        now = datetime.now(PARIS_TZ)
         if last_message_at.tzinfo is None:
-            last_message_at = last_message_at.replace(tzinfo=timezone.utc)
+            last_message_at = last_message_at.replace(tzinfo=PARIS_TZ)
 
         elapsed_seconds = (now - last_message_at).total_seconds()
         elapsed_minutes = elapsed_seconds / 60

@@ -75,8 +75,9 @@ from services.investment_tracker import investment_tracker
 
 logger = logging.getLogger(__name__)
 
-# Extraction memoire tous les X messages
-MEMORY_EXTRACTION_INTERVAL = 5
+# Extraction memoire tous les X messages (augmenté pour réduire N+1 queries)
+MEMORY_EXTRACTION_INTERVAL = 15
+ATTACHMENT_UPDATE_INTERVAL = 25
 
 # V5: Psychology engines (singletons)
 variable_rewards = VariableRewardsEngine()
@@ -671,7 +672,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             user_id=user_id,
             phase=day_count,
             day_count=day_count,
-            messages_this_session=msg_count % 50,  # Approximation
+            messages_this_session=messages_this_session,  # Vrai compteur de session
             user_message=user_text,
             memory=memory,
             conversation_sentiment="positive" if any(e in user_text.lower() for e in ["merci", "cool", "super", "j'aime"]) else "neutral"
@@ -729,8 +730,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception as e:
             logger.error(f"Memory extraction failed for user {user_id}: {e}")
 
-    # V5: Update attachment score periodically
-    if msg_count % 10 == 0:
+    # V5: Update attachment score periodically (augmenté pour réduire N+1)
+    if msg_count % ATTACHMENT_UPDATE_INTERVAL == 0:
         try:
             # Recuperer les messages pour analyse
             all_history = await get_history(user_id, limit=50)

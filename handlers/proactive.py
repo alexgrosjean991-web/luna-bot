@@ -13,6 +13,7 @@ from services.db import (
     get_user_data, get_emotional_state, set_emotional_state,
     get_users_for_winback, get_winback_state, update_winback_state,
     get_users_at_churn_risk, update_churn_state, get_timing_profile,
+    safe_json_loads,
 )
 from services.relationship import get_relationship_phase
 from services.subscription import (
@@ -111,7 +112,7 @@ async def send_proactive_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
                 # Generer le message
                 memory = user.get("memory", {})
                 if isinstance(memory, str):
-                    memory = json.loads(memory)
+                    memory = safe_json_loads(memory, {}, "proactive memory")
 
                 message = get_random_message(msg_type, memory, phase)
 
@@ -184,7 +185,7 @@ async def send_winback_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
             # Generer le message
             memory = user.get("memory", {})
             if isinstance(memory, str):
-                memory = json.loads(memory) if memory else {}
+                memory = safe_json_loads(memory, {}, "winback memory")
 
             message = winback_engine.get_winback_message(stage, memory)
 
@@ -225,17 +226,22 @@ async def check_churn_risk(context: ContextTypes.DEFAULT_TYPE) -> None:
                 last_active = last_active.replace(tzinfo=PARIS_TZ)
             hours_inactive = (now - last_active).total_seconds() / 3600
 
-            # Construire les signaux (simplifie)
+            # Construire les signaux depuis les données utilisateur
             from services.churn_prediction import ChurnSignals
+            total_msgs = user.get("total_messages", 0)
+            session_count = user.get("session_count", 1) or 1
+            user_initiated = user.get("user_initiated_count", 0) or 0
+            attachment = user.get("attachment_score", 0) or 0
+
             signals = ChurnSignals(
                 hours_since_last_message=hours_inactive,
-                avg_message_length_recent=50,  # TODO: calculer
+                avg_message_length_recent=50 if total_msgs < 10 else 40,  # Estimation conservatrice
                 avg_message_length_historical=50,
-                messages_last_24h=0,
-                messages_last_7d=user.get("total_messages", 0),
-                session_count_last_7d=1,
-                questions_asked_last_10=2,
-                user_initiated_ratio=0.5,
+                messages_last_24h=0 if hours_inactive > 24 else max(1, total_msgs // 10),
+                messages_last_7d=total_msgs,
+                session_count_last_7d=min(session_count, 7),
+                questions_asked_last_10=2 if attachment > 10 else 1,  # Basé sur attachment
+                user_initiated_ratio=min(1.0, user_initiated / session_count),
                 response_time_trend="stable"
             )
 
@@ -254,7 +260,7 @@ async def check_churn_risk(context: ContextTypes.DEFAULT_TYPE) -> None:
                 if current_hour in peak_hours or prediction.risk == ChurnRisk.HIGH:
                     memory = user.get("memory", {})
                     if isinstance(memory, str):
-                        memory = json.loads(memory) if memory else {}
+                        memory = safe_json_loads(memory, {}, "churn memory")
 
                     # Message personnalise selon le risque
                     if prediction.risk == ChurnRisk.HIGH:

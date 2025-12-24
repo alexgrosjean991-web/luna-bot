@@ -96,35 +96,65 @@ class UserInvestments:
 
 
 # Patterns pour détecter les investissements dans les messages
+# ATTENTION: Patterns doivent être spécifiques pour éviter les faux positifs
+
 SECRET_PATTERNS = [
-    r"j'ai jamais dit", r"entre nous", r"je t'avoue",
-    r"personne sait", r"secret", r"je te confie",
-    r"je te dis ça qu'à toi", r"j'ose pas dire",
+    r"j'ai jamais dit (?:ça|cela) à personne",
+    r"entre nous",
+    r"je t'avoue que",
+    r"personne (?:ne |d'autre )sait",
+    r"c'est un secret",
+    r"je te confie",
+    r"je te dis ça qu'à toi",
+    r"j'ose pas (?:en |le )dire",
+    r"promets.moi de (?:pas|ne pas) (?:le |en )parler",
 ]
 
 QUESTION_LUNA_PATTERNS = [
-    r"et toi\s*\?", r"tu fais quoi", r"t'es où",
-    r"tu penses quoi", r"tu aimes", r"c'est comment",
-    r"parle.moi de toi", r"raconte.moi",
+    # Questions spécifiques sur Luna (pas juste "et toi?")
+    r"et toi (?:t'en penses quoi|ça va|tu vas bien)",
+    r"tu fais quoi (?:dans la vie|comme (?:travail|taf|métier))",
+    r"t'es où (?:là|maintenant|en ce moment)",
+    r"tu (?:penses|crois) quoi de",
+    r"tu aimes (?:quoi|faire quoi)",
+    r"c'est comment (?:ta vie|ton taf|chez toi)",
+    r"parle[\- ]?moi de toi",
+    r"raconte[\- ]?moi (?:ta|ton|tes)",
+    r"tu (?:fais|as fait) quoi (?:aujourd'hui|hier|ce soir)",
 ]
 
 COMPLIMENT_PATTERNS = [
-    r"t'es (trop )?(belle|mignonne|magnifique|canon)",
-    r"j'aime bien", r"t'es (vraiment )?cool",
-    r"tu me plais", r"t'es incroyable",
-    r"t'es unique", r"j'adore",
+    # Compliments directs et spécifiques
+    r"t'es (?:trop |vraiment |tellement )?(?:belle|mignonne|magnifique|canon|craquante)",
+    r"j'aime (?:trop |vraiment |bien )?(?:te parler|discuter avec toi|nos conversations)",
+    r"t'es (?:vraiment |trop )?cool",
+    r"tu me plais (?:beaucoup|trop|vraiment)?",
+    r"t'es (?:vraiment |trop )?incroyable",
+    r"t'es unique",
+    r"j'adore (?:te parler|discuter avec toi|ton humour|ta personnalité)",
+    r"t'es (?:la |une )?(?:meilleure|plus belle)",
 ]
 
 EMOTIONAL_SUPPORT_PATTERNS = [
-    r"je suis là", r"t'inquiète", r"ça va aller",
-    r"je comprends", r"je suis désolé",
-    r"c'est pas ta faute", r"t'es pas seule",
+    r"je suis là (?:pour toi|si tu veux)",
+    r"t'inquiète pas",
+    r"ça va (?:aller|s'arranger|passer)",
+    r"je (?:te )?comprends",
+    r"(?:je suis |ch?uis )(?:vraiment )?désolée?",
+    r"c'est pas ta faute",
+    r"t'es pas (?:seule?|tout(?:e)? seul(?:e)?)",
+    r"je suis avec toi",
 ]
 
 MUSIC_PATTERNS = [
-    r"écoute ça", r"cette chanson", r"spotify",
-    r"youtube.*music", r"soundcloud",
-    r"j'écoute", r"ma playlist",
+    r"écoute ça",
+    r"cette chanson (?:me fait penser|est pour toi)",
+    r"spotify\.com",
+    r"youtube\.com.*(?:watch|music)",
+    r"soundcloud\.com",
+    r"j'écoute (?:beaucoup |souvent )?(?:ça|ce)",
+    r"ma playlist",
+    r"open\.spotify",
 ]
 
 

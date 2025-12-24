@@ -2,10 +2,24 @@
 import json
 import logging
 from datetime import datetime, timedelta
+from typing import Any
 import asyncpg
 from settings import DB_CONFIG, HISTORY_LIMIT, PARIS_TZ, DB_POOL_MIN, DB_POOL_MAX
 
 logger = logging.getLogger(__name__)
+
+
+def safe_json_loads(data: Any, default: Any = None, context: str = "") -> Any:
+    """Parse JSON de manière sécurisée avec fallback."""
+    if data is None:
+        return default if default is not None else {}
+    if not isinstance(data, str):
+        return data  # Déjà un dict/list
+    try:
+        return json.loads(data)
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON corrompu {context}: {e}")
+        return default if default is not None else {}
 
 pool: asyncpg.Pool | None = None
 
@@ -22,6 +36,38 @@ def get_pool() -> asyncpg.Pool:
             "Database pool not initialized. Call init_db() first."
         )
     return pool
+
+
+async def execute_with_retry(query: str, *args, max_retries: int = 3):
+    """Execute une requête avec retry en cas d'erreur de connexion."""
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            async with get_pool().acquire() as conn:
+                return await conn.execute(query, *args)
+        except (asyncpg.InterfaceError, asyncpg.ConnectionDoesNotExistError) as e:
+            last_error = e
+            logger.warning(f"DB connection error (attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                import asyncio
+                await asyncio.sleep(0.5 * (attempt + 1))
+    raise last_error
+
+
+async def fetchrow_with_retry(query: str, *args, max_retries: int = 3):
+    """Fetch une row avec retry en cas d'erreur de connexion."""
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            async with get_pool().acquire() as conn:
+                return await conn.fetchrow(query, *args)
+        except (asyncpg.InterfaceError, asyncpg.ConnectionDoesNotExistError) as e:
+            last_error = e
+            logger.warning(f"DB connection error (attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                import asyncio
+                await asyncio.sleep(0.5 * (attempt + 1))
+    raise last_error
 
 
 async def init_db() -> None:
@@ -203,6 +249,98 @@ async def init_db() -> None:
             current_tier INT DEFAULT 1
         """)
 
+        # V7: Colonnes pour Trust system
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            trust_score INTEGER DEFAULT 50
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            luna_last_state VARCHAR(20) DEFAULT 'neutral'
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            unlocked_secrets JSONB DEFAULT '[]'::jsonb
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            last_trust_update TIMESTAMP WITH TIME ZONE DEFAULT NULL
+        """)
+
+        # Phase A: Intent + AHA
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            user_intent VARCHAR(20) DEFAULT NULL
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            aha_triggered BOOLEAN DEFAULT FALSE
+        """)
+
+        # Phase B: Gates + Investment
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            gates_triggered JSONB DEFAULT '[]'::jsonb
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            investment_score INTEGER DEFAULT 0
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            secrets_shared_count INTEGER DEFAULT 0
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            compliments_given INTEGER DEFAULT 0
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            questions_about_luna INTEGER DEFAULT 0
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            user_segment VARCHAR(20) DEFAULT 'casual'
+        """)
+
+        # Phase C: Churn + Win-back
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            churn_risk VARCHAR(20) DEFAULT 'low'
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            churn_score FLOAT DEFAULT 0
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            last_churn_check TIMESTAMP WITH TIME ZONE DEFAULT NULL
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            winback_stage VARCHAR(20) DEFAULT NULL
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            last_winback_at TIMESTAMP WITH TIME ZONE DEFAULT NULL
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            winback_attempts INTEGER DEFAULT 0
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            peak_hours JSONB DEFAULT '[]'::jsonb
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            active_days JSONB DEFAULT '[]'::jsonb
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            avg_response_time FLOAT DEFAULT NULL
+        """)
+
     logger.info("DB connectée")
 
 
@@ -259,8 +397,7 @@ async def get_user_memory(user_id: int) -> dict:
             user_id
         )
         if row and row["memory"]:
-            mem = row["memory"]
-            return json.loads(mem) if isinstance(mem, str) else mem
+            return safe_json_loads(row["memory"], {}, f"memory user {user_id}")
         return {}
 
 
@@ -450,8 +587,7 @@ async def get_inside_jokes(user_id: int) -> list:
             "SELECT inside_jokes FROM users WHERE id = $1", user_id
         )
         if row and row["inside_jokes"]:
-            jokes = row["inside_jokes"]
-            return json.loads(jokes) if isinstance(jokes, str) else jokes
+            return safe_json_loads(row["inside_jokes"], [], f"inside_jokes user {user_id}")
         return []
 
 
@@ -472,8 +608,7 @@ async def get_pending_events(user_id: int) -> list:
             "SELECT pending_events FROM users WHERE id = $1", user_id
         )
         if row and row["pending_events"]:
-            events = row["pending_events"]
-            return json.loads(events) if isinstance(events, str) else events
+            return safe_json_loads(row["pending_events"], [], f"pending_events user {user_id}")
         return []
 
 
@@ -543,12 +678,9 @@ async def get_psychology_data(user_id: int) -> dict:
         if not row:
             return {}
 
-        inside_jokes = row["inside_jokes"]
-        pending_events = row["pending_events"]
-
         return {
-            "inside_jokes": json.loads(inside_jokes) if isinstance(inside_jokes, str) else (inside_jokes or []),
-            "pending_events": json.loads(pending_events) if isinstance(pending_events, str) else (pending_events or []),
+            "inside_jokes": safe_json_loads(row["inside_jokes"], [], "psych inside_jokes"),
+            "pending_events": safe_json_loads(row["pending_events"], [], "psych pending_events"),
             "attachment_score": row["attachment_score"] or 0,
             "session_count": row["session_count"] or 0,
             "user_initiated_count": row["user_initiated_count"] or 0,
@@ -748,14 +880,10 @@ async def get_trust_state(user_id: int) -> dict:
                 "last_trust_update": None
             }
 
-        secrets = row["unlocked_secrets"]
-        if isinstance(secrets, str):
-            secrets = json.loads(secrets)
-
         return {
-            "trust_score": row["trust_score"],
+            "trust_score": max(0, min(100, row["trust_score"] or 50)),  # Clamp 0-100
             "luna_last_state": row["luna_last_state"],
-            "unlocked_secrets": secrets if secrets else [],
+            "unlocked_secrets": safe_json_loads(row["unlocked_secrets"], [], "unlocked_secrets"),
             "last_trust_update": row["last_trust_update"]
         }
 
@@ -812,10 +940,7 @@ async def get_unlocked_secrets(user_id: int) -> list:
         if not row:
             return []
 
-        secrets = row["secrets"]
-        if isinstance(secrets, str):
-            return json.loads(secrets)
-        return secrets if secrets else []
+        return safe_json_loads(row["secrets"], [], f"unlocked_secrets user {user_id}")
 
 
 # ============== PHASE A: Intent + AHA ==============
@@ -864,8 +989,7 @@ async def get_gates_triggered(user_id: int) -> list[str]:
             "SELECT gates_triggered FROM users WHERE id = $1", user_id
         )
         if row and row["gates_triggered"]:
-            gates = row["gates_triggered"]
-            return json.loads(gates) if isinstance(gates, str) else gates
+            return safe_json_loads(row["gates_triggered"], [], f"gates_triggered user {user_id}")
         return []
 
 
@@ -914,20 +1038,18 @@ async def update_investment(
 ) -> None:
     """Met à jour les investissements utilisateur."""
     async with get_pool().acquire() as conn:
-        updates = ["investment_score = investment_score + $2"]
-        params = [user_id, score_delta]
-        param_idx = 3
-
-        if secret:
-            updates.append(f"secrets_shared_count = secrets_shared_count + 1")
-        if compliment:
-            updates.append(f"compliments_given = compliments_given + 1")
-        if question_luna:
-            updates.append(f"questions_about_luna = questions_about_luna + 1")
-
-        await conn.execute(f"""
-            UPDATE users SET {', '.join(updates)} WHERE id = $1
-        """, *params)
+        # Utiliser une requête statique pour éviter l'injection SQL
+        await conn.execute("""
+            UPDATE users SET
+                investment_score = investment_score + $2,
+                secrets_shared_count = secrets_shared_count + $3,
+                compliments_given = compliments_given + $4,
+                questions_about_luna = questions_about_luna + $5
+            WHERE id = $1
+        """, user_id, score_delta,
+             1 if secret else 0,
+             1 if compliment else 0,
+             1 if question_luna else 0)
 
 
 async def update_user_segment(user_id: int, segment: str) -> None:
@@ -1038,12 +1160,9 @@ async def get_timing_profile(user_id: int) -> dict:
                 "avg_response_time": None
             }
 
-        peak = row["peak_hours"]
-        days = row["active_days"]
-
         return {
-            "peak_hours": json.loads(peak) if isinstance(peak, str) else peak,
-            "active_days": json.loads(days) if isinstance(days, str) else days,
+            "peak_hours": safe_json_loads(row["peak_hours"], [], "peak_hours"),
+            "active_days": safe_json_loads(row["active_days"], [], "active_days"),
             "avg_response_time": row["avg_response_time"]
         }
 
