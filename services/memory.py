@@ -98,9 +98,26 @@ async def extract_memory(
                     result_text = result_text[4:]
             result_text = result_text.strip()
 
-            new_memory = json.loads(result_text)
-            logger.info(f"Mémoire extraite: {new_memory}")
-            return new_memory
+            extracted = json.loads(result_text)
+
+            # Fusionner: garder les anciennes valeurs si nouvelles sont null/vides
+            merged = current_memory.copy() if current_memory else {}
+            for key, value in extracted.items():
+                if value is not None:
+                    # Pour les listes, fusionner sans doublons
+                    if isinstance(value, list) and value:
+                        existing = merged.get(key, [])
+                        if isinstance(existing, list):
+                            merged[key] = list(set(existing + value))
+                        else:
+                            merged[key] = value
+                    # Pour les strings/numbers, remplacer si non vide
+                    elif value:
+                        merged[key] = value
+
+            logger.info(f"Mémoire extraite: {extracted}")
+            logger.info(f"Mémoire fusionnée: {merged}")
+            return merged
 
     except json.JSONDecodeError as e:
         logger.error(f"Erreur parsing JSON mémoire: {e}")
