@@ -96,7 +96,7 @@ FLIRT_PATTERNS = [
 
 # Negative emotions: Block escalation
 NEGATIVE_PATTERNS = [
-    r'je (?:suis |me sens )(?:triste|mal|déprimé|seul|anxieux|pas bien)',
+    r'je (?:suis |me sens )(?:triste|mal|déprimée?|seule?|anxieux|anxieuse|pas bien)',
     r'j\'ai (?:envie de |)(?:pleurer|mourir)',
     r'personne (?:ne |)(?:m\'aime|me comprend)',
     r'j\'en (?:peux |ai )plus',
