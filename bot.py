@@ -576,8 +576,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         user_climax = True
         target_level = ConversationLevel.SFW
         level_modifier = "AFTERCARE"
-        await start_cooldown(user_id, TransitionManager.COOLDOWN_MESSAGES)
-        logger.info(f"V7: User climax detected, starting AFTERCARE cooldown")
+        logger.info(f"V7: User climax detected, will start AFTERCARE cooldown")
 
     # FIX V7: Désescalade naturelle NSFW → SFW/TENSION (sans climax)
     if not user_climax and transition_state["current_level"] == 3 and target_level < 3:
@@ -716,20 +715,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     logger.info(f"[Luna] {response}")
 
+    # V7: Check for climax in Luna's response (si pas déjà triggered par user)
+    luna_climax = False
+    if not user_climax and target_level == ConversationLevel.NSFW and detect_climax(response):
+        luna_climax = True
+        logger.info(f"V7: Luna climax detected")
+
     # V7: Update transition state
     level_changed = int(target_level) != transition_state["current_level"]
+
+    # Calculer le cooldown: si climax (user ou Luna), set à COOLDOWN_MESSAGES, sinon décrémenter
+    if user_climax or luna_climax:
+        new_cooldown = TransitionManager.COOLDOWN_MESSAGES
+    else:
+        new_cooldown = max(0, transition_state["cooldown_remaining"] - 1)
+
     await update_transition_state(
         user_id=user_id,
         current_level=int(target_level),
         messages_this_session=transition_state["messages_this_session"] + 1,
         messages_since_level_change=0 if level_changed else transition_state["messages_since_level_change"] + 1,
-        cooldown_remaining=max(0, transition_state["cooldown_remaining"] - 1)
+        cooldown_remaining=new_cooldown
     )
-
-    # V7: Check for climax in Luna's response (si pas déjà triggered par user)
-    if not user_climax and target_level == ConversationLevel.NSFW and detect_climax(response):
-        await start_cooldown(user_id, TransitionManager.COOLDOWN_MESSAGES)
-        logger.info(f"V7: Luna climax detected, starting {TransitionManager.COOLDOWN_MESSAGES} messages cooldown")
 
     # 16. Extraction mémoire périodique
     if msg_count % MEMORY_EXTRACTION_INTERVAL == 0:
