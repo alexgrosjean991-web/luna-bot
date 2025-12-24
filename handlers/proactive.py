@@ -43,10 +43,19 @@ async def send_proactive_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
             if count >= MAX_PROACTIVE_PER_DAY:
                 continue
 
-            # Recuperer phase
+            # Recuperer phase (V7: basé sur msg_count)
             user_data = await get_user_data(user_id)
             first_message_at = user_data.get("first_message_at")
-            phase, day_count = get_relationship_phase(first_message_at)
+            msg_count = user_data.get("message_count", 0)
+            phase, _ = get_relationship_phase(msg_count)
+
+            # Calculer day_count pour compatibilité
+            if first_message_at:
+                if first_message_at.tzinfo is None:
+                    first_message_at = first_message_at.replace(tzinfo=PARIS_TZ)
+                day_count = (now - first_message_at).days + 1
+            else:
+                day_count = 1
 
             # Verifier paywall
             if first_message_at and is_trial_expired(first_message_at):
