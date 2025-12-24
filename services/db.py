@@ -853,3 +853,87 @@ async def set_aha_triggered(user_id: int) -> None:
         await conn.execute(
             "UPDATE users SET aha_triggered = TRUE WHERE id = $1", user_id
         )
+
+
+# ============== PHASE B: Gates + Investment ==============
+
+async def get_gates_triggered(user_id: int) -> list[str]:
+    """Récupère la liste des gates déjà déclenchées."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT gates_triggered FROM users WHERE id = $1", user_id
+        )
+        if row and row["gates_triggered"]:
+            gates = row["gates_triggered"]
+            return json.loads(gates) if isinstance(gates, str) else gates
+        return []
+
+
+async def add_gate_triggered(user_id: int, gate_id: str) -> None:
+    """Ajoute une gate déclenchée."""
+    async with get_pool().acquire() as conn:
+        await conn.execute("""
+            UPDATE users SET
+                gates_triggered = COALESCE(gates_triggered, '[]'::jsonb) || $2::jsonb
+            WHERE id = $1
+            AND NOT (COALESCE(gates_triggered, '[]'::jsonb) @> $2::jsonb)
+        """, user_id, json.dumps([gate_id]))
+
+
+async def get_investment_data(user_id: int) -> dict:
+    """Récupère les données d'investissement."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT
+                COALESCE(investment_score, 0) as investment_score,
+                COALESCE(secrets_shared_count, 0) as secrets_shared_count,
+                COALESCE(compliments_given, 0) as compliments_given,
+                COALESCE(questions_about_luna, 0) as questions_about_luna,
+                COALESCE(user_segment, 'casual') as user_segment
+            FROM users WHERE id = $1
+        """, user_id)
+
+        if not row:
+            return {
+                "investment_score": 0,
+                "secrets_shared_count": 0,
+                "compliments_given": 0,
+                "questions_about_luna": 0,
+                "user_segment": "casual"
+            }
+
+        return dict(row)
+
+
+async def update_investment(
+    user_id: int,
+    score_delta: int = 0,
+    secret: bool = False,
+    compliment: bool = False,
+    question_luna: bool = False
+) -> None:
+    """Met à jour les investissements utilisateur."""
+    async with get_pool().acquire() as conn:
+        updates = ["investment_score = investment_score + $2"]
+        params = [user_id, score_delta]
+        param_idx = 3
+
+        if secret:
+            updates.append(f"secrets_shared_count = secrets_shared_count + 1")
+        if compliment:
+            updates.append(f"compliments_given = compliments_given + 1")
+        if question_luna:
+            updates.append(f"questions_about_luna = questions_about_luna + 1")
+
+        await conn.execute(f"""
+            UPDATE users SET {', '.join(updates)} WHERE id = $1
+        """, *params)
+
+
+async def update_user_segment(user_id: int, segment: str) -> None:
+    """Met à jour le segment utilisateur."""
+    async with get_pool().acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET user_segment = $1 WHERE id = $2",
+            segment, user_id
+        )

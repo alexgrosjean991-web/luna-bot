@@ -24,6 +24,8 @@ from services.db import (
     get_momentum_state, update_momentum_state, start_climax_recovery,
     get_trust_state, update_trust_score, add_unlocked_secret,
     get_user_intent, set_user_intent, get_aha_triggered, set_aha_triggered,
+    get_gates_triggered, add_gate_triggered,
+    get_investment_data, update_investment, update_user_segment,
 )
 from services.psychology.variable_rewards import VariableRewardsEngine, RewardContext
 from services.psychology.inside_jokes import InsideJokesEngine, InsideJoke
@@ -62,6 +64,12 @@ from services.intent_detection import (
     detect_intent_from_messages, should_detect_intent,
     get_intent_modifier, UserIntent
 )
+from services.gates import check_gate_opportunity, get_gate_instruction
+from services.paywall_dynamic import (
+    should_show_paywall, build_ready_signals_from_user_data,
+    get_paywall_urgency
+)
+from services.investment_tracker import investment_tracker
 
 
 logger = logging.getLogger(__name__)
@@ -143,19 +151,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     trust_score = trust_data.get("trust_score", 50)
     luna_last_state = trust_data.get("luna_last_state", "neutral")
 
-    # 7. Verifier subscription (paywall apres 5 jours, sauf si abonne)
+    # 7. Verifier subscription (PHASE B: paywall dynamique selon intent)
     subscription_status = user_data.get("subscription_status", "trial")
-    if subscription_status != "active" and first_message_at and is_trial_expired(first_message_at):
+    current_intent = await get_user_intent(user_id)
+
+    if subscription_status != "active" and first_message_at:
         paywall_sent = await has_paywall_been_sent(user_id, get_pool())
 
-        if not paywall_sent:
+        # Build ready signals for dynamic paywall
+        ready_signals = build_ready_signals_from_user_data(user_data)
+        should_paywall, paywall_reason = should_show_paywall(
+            day_count=day_count,
+            intent=current_intent,
+            ready_signals=ready_signals,
+            paywall_already_sent=paywall_sent
+        )
+
+        if should_paywall:
+            urgency = get_paywall_urgency(day_count, current_intent)
             paywall_msg = get_paywall_message(first_message_at, user_id)
             await update.message.reply_text(paywall_msg)
             await save_message(user_id, "assistant", paywall_msg)
             await mark_paywall_sent(user_id, get_pool())
-            logger.info(f"Paywall envoye a user {user_id}")
+            logger.info(f"Paywall envoye: reason={paywall_reason}, urgency={urgency}, intent={current_intent}")
             return
-        else:
+        elif paywall_sent:
             response = get_post_paywall_response()
             await update.message.reply_text(response)
             await save_message(user_id, "assistant", response)
@@ -386,6 +406,58 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         extra_instructions.append(aha_instruction)
         await set_aha_triggered(user_id)
         logger.info(f"Phase A: AHA moment triggered at msg {msg_count}")
+
+    # ============== PHASE B: Gates (J3-J5) ==============
+    gates_triggered = await get_gates_triggered(user_id)
+
+    gate_result = check_gate_opportunity(
+        day_count=day_count,
+        current_hour=current_hour,
+        gates_triggered=gates_triggered
+    )
+
+    if gate_result:
+        gate_type, gate_msg = gate_result
+        gate_instruction = get_gate_instruction(gate_type)
+        extra_instructions.append(gate_instruction)
+        await add_gate_triggered(user_id, gate_type.value)
+        logger.info(f"Phase B: Gate {gate_type.value} triggered at hour {current_hour}")
+
+    # ============== PHASE B: Investment Tracking ==============
+    investments = investment_tracker.analyze_message(
+        message=user_text,
+        is_user_initiated=is_new_session,
+        response_time_seconds=None  # TODO: track actual response time
+    )
+
+    # Calculate score delta from investments
+    score_delta = 0
+    if investments["secret"]:
+        score_delta += 10
+    if investments["long_message"]:
+        score_delta += 3
+    if investments["question_about_luna"]:
+        score_delta += 2
+    if investments["compliment"]:
+        score_delta += 4
+    if investments["emotional_support"]:
+        score_delta += 8
+    if investments["music"]:
+        score_delta += 5
+    if investments["initiated"]:
+        score_delta += 5
+    if investments["quick_response"]:
+        score_delta += 2
+
+    if score_delta > 0:
+        await update_investment(
+            user_id=user_id,
+            score_delta=score_delta,
+            secret=investments["secret"],
+            compliment=investments["compliment"],
+            question_luna=investments["question_about_luna"]
+        )
+        logger.info(f"Phase B: Investment +{score_delta} pts")
 
     # V5: Memory callback instruction
     memory_instruction = memory_callbacks.get_memory_instruction(memory)
