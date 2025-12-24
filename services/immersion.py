@@ -257,15 +257,23 @@ def get_emotion_instruction(emotion: LunaEmotion) -> str | None:
 
 # ============== JEALOUSY DETECTION ==============
 
-# Prénoms féminins courants en France
-FEMALE_NAMES = {
-    "marie", "emma", "léa", "chloé", "camille", "manon", "julie", "sarah",
-    "laura", "clara", "lucie", "océane", "jade", "louise", "alice", "lola",
-    "inès", "eva", "charlotte", "nina", "lisa", "anaïs", "margot", "mathilde",
-    "pauline", "marion", "audrey", "morgane", "justine", "elsa", "zoé",
-    "sophia", "victoria", "juliette", "amélie", "clémence", "marine", "aurélie",
-    # Diminutifs
-    "mimi", "lili", "loulou", "coco", "nana",
+# Terminaisons typiquement féminines (heuristique simple)
+FEMININE_ENDINGS = (
+    "ine", "ette", "elle", "ienne", "ise", "aine",  # Français
+    "ia", "iya", "ya", "na", "la", "ra", "ta", "ka", "sa", "da", "ma",  # International
+    "ie", "ee", "ey", "ly", "sy", "ny", "ry",  # Anglo
+    "oua", "ima", "ika", "ila",  # Arabe
+)
+
+# Mots à NE PAS considérer comme prénoms
+NOT_NAMES = {
+    "pizza", "coca", "vodka", "tequila", "salsa", "villa", "visa", "camera",
+    "pasta", "java", "yoga", "spa", "sofa", "syria", "russia", "india", "china",
+    "mama", "gonna", "wanna", "gotta", "kinda", "voila", "voilà", "cela",
+    "cette", "sera", "sera", "fera", "aura", "voila", "extra", "ultra",
+    "prima", "mega", "giga", "meta", "beta", "delta", "gamma", "alpha",
+    "zumba", "salsa", "rumba", "samba", "polka", "opera", "pizza", "piazza",
+    "cinema", "panorama", "drama", "pyjama", "coma", "aroma", "karma", "magma",
 }
 
 JEALOUSY_INSTRUCTION = """## JALOUSIE DÉTECTÉE
@@ -277,14 +285,27 @@ NE SOIS PAS agressive ou possessive, juste curieuse/piquée.
 
 
 def detect_jealousy_trigger(message: str) -> bool:
-    """Détecte si le message mentionne un prénom féminin."""
-    words = message.lower().split()
-    for word in words:
-        # Nettoyer la ponctuation
-        clean_word = ''.join(c for c in word if c.isalpha())
-        if clean_word in FEMALE_NAMES:
-            logger.info(f"Jealousy trigger detected: {clean_word}")
+    """
+    Détecte si le message mentionne un prénom féminin.
+    Utilise une heuristique: mot avec majuscule + terminaison féminine.
+    """
+    import re
+
+    # Chercher les mots qui commencent par une majuscule (potentiels prénoms)
+    potential_names = re.findall(r'\b[A-ZÀ-Ÿ][a-zà-ÿ]{2,12}\b', message)
+
+    for word in potential_names:
+        word_lower = word.lower()
+
+        # Ignorer les mots connus qui ne sont pas des prénoms
+        if word_lower in NOT_NAMES:
+            continue
+
+        # Check si terminaison féminine
+        if word_lower.endswith(FEMININE_ENDINGS):
+            logger.info(f"Jealousy trigger detected: {word}")
             return True
+
     return False
 
 

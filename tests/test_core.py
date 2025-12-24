@@ -413,9 +413,13 @@ class TestImmersion:
 
     def test_jealousy_detection(self):
         from services.immersion import detect_jealousy_trigger
-        assert detect_jealousy_trigger("j'ai vu marie hier") is True
+        # Prénoms avec majuscule (heuristique: majuscule + terminaison féminine)
+        assert detect_jealousy_trigger("j'ai vu Marie hier") is True
         assert detect_jealousy_trigger("j'ai mangé une pizza") is False
-        assert detect_jealousy_trigger("avec emma on est sorti") is True
+        assert detect_jealousy_trigger("avec Emma on est sorti") is True
+        assert detect_jealousy_trigger("j'ai vu Malika") is True
+        # Sans majuscule = pas détecté (c'est normal)
+        assert detect_jealousy_trigger("j'ai vu marie hier") is False
 
     def test_open_topics_detection(self):
         from services.immersion import detect_open_topics
