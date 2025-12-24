@@ -50,6 +50,9 @@ from services.llm_router import get_llm_config_v3, is_premium_session
 from services.prompt_selector import get_prompt_for_tier, get_prompt_for_tier_v7
 from services.luna_mood import luna_mood_engine, LunaMood, MoodContext
 from services.secrets import secrets_engine
+from services.anti_repetition import add_response, check_repetition, get_variety_instruction, should_add_variety_reminder
+from services.context_enricher import get_enriched_context
+from services.character_anchor import get_anchor_instruction, get_consistency_check
 from prompts.deflect import get_deflect_prompt, get_luna_initiates_prompt
 from services.llm import call_with_graceful_fallback
 from services import conversion
@@ -408,6 +411,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await add_unlocked_secret(user_id, secret_to_reveal.id)
         logger.info(f"V7 Secret: revealing '{secret_to_reveal.id}' (layer {secret_to_reveal.layer})")
 
+    # ============== FIX 1: Anti-répétition ==============
+    if should_add_variety_reminder(user_id):
+        extra_instructions.append(get_variety_instruction())
+        logger.info("Anti-rep: variety reminder added")
+
+    # ============== FIX 2: Context enrichi ==============
+    enriched_ctx = get_enriched_context(
+        hour=current_hour,
+        day_of_week=datetime.now(PARIS_TZ).weekday(),
+        msg_count=msg_count,
+        include_pixel=True,
+        include_activity=True,
+        include_struggle=(msg_count > 30)
+    )
+    if enriched_ctx:
+        extra_instructions.append(enriched_ctx)
+        logger.info("Context enrichi added")
+
+    # ============== FIX 3: Character anchor ==============
+    anchor = get_anchor_instruction(msg_count)
+    if anchor:
+        extra_instructions.append(anchor)
+        logger.info(f"Character anchor injected at msg {msg_count}")
+
+    consistency = get_consistency_check(phase, msg_count)
+    if consistency:
+        extra_instructions.append(consistency)
+
     # ============== V3: LLM Router (Tier-based) ==============
     teasing_stage = user_data.get("teasing_stage", 0)
     subscription_status = user_data.get("subscription_status", "trial")
@@ -536,6 +567,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # 15. Sauvegarder reponse Luna
     await save_message(user_id, "assistant", response)
+
+    # FIX 1: Cache response for anti-repetition
+    add_response(user_id, response)
 
     logger.info(f"[Luna] {response}")
 
