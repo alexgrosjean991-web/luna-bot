@@ -886,9 +886,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # V7: Build system prompt based on tier with NSFW state support
     # Get user context for NSFW prompts
-    user_name = memory.get("prenom", "lui") if memory else "lui"
+    user_name = (memory.get("prenom") if memory else None) or "lui"
     inside_jokes_list = [j.value for j in existing_jokes] if existing_jokes else []
-    pet_names_list = memory.get("pet_names", []) if memory else []
+    pet_names_list = (memory.get("pet_names") if memory else None) or []
 
     # Get NSFW state for tier 3
     nsfw_state = momentum_engine.get_nsfw_state(new_momentum, messages_since_climax)
