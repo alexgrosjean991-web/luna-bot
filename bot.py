@@ -814,21 +814,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # V5: Modify response based on intermittent affection
     response = intermittent.modify_response(response, intermittent_state)
 
-    # V5: Check variable rewards
-    reward_context = RewardContext(
-        user_id=user_id,
-        phase=day_count,
-        day_count=day_count,
-        messages_this_session=msg_count % 50,  # Approximation
-        user_message=user_text,
-        memory=memory,
-        conversation_sentiment="positive" if any(e in user_text.lower() for e in ["merci", "cool", "super", "j'aime"]) else "neutral"
-    )
-    reward = variable_rewards.check_reward(reward_context)
-    if reward:
-        reward_type, reward_msg = reward
-        response = response + "\n\n" + reward_msg
-        logger.info(f"Variable reward added: {reward_type.value}")
+    # V5: Check variable rewards (skip during NSFW tier 3 to avoid awkward mix)
+    if tier < 3:
+        reward_context = RewardContext(
+            user_id=user_id,
+            phase=day_count,
+            day_count=day_count,
+            messages_this_session=msg_count % 50,  # Approximation
+            user_message=user_text,
+            memory=memory,
+            conversation_sentiment="positive" if any(e in user_text.lower() for e in ["merci", "cool", "super", "j'aime"]) else "neutral"
+        )
+        reward = variable_rewards.check_reward(reward_context)
+        if reward:
+            reward_type, reward_msg = reward
+            response = response + "\n\n" + reward_msg
+            logger.info(f"Variable reward added: {reward_type.value}")
 
     # V5: Add inside joke creation message if opportunity
     if joke_opportunity:
