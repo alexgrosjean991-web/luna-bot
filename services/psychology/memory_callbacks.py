@@ -226,12 +226,13 @@ class MemoryCallbacksEngine:
 
         return events
 
-    def get_memory_instruction(self, memory: dict) -> Optional[str]:
+    def get_memory_instruction(self, memory: dict, force: bool = False) -> Optional[str]:
         """
         Génère une instruction pour utiliser la mémoire dans la réponse.
 
         Args:
             memory: Mémoire de l'utilisateur
+            force: Si True, génère toujours une instruction (ignore probabilité)
 
         Returns:
             Instruction pour le LLM ou None
@@ -239,31 +240,41 @@ class MemoryCallbacksEngine:
         if not memory:
             return None
 
-        # 35% chance de forcer utilisation mémoire
-        if random.random() > 0.35:
+        # 50% chance de forcer utilisation mémoire (augmenté de 35%)
+        # Ou 100% si force=True
+        if not force and random.random() > 0.50:
             return None
 
         instructions = []
 
+        # Prénom: priorité haute, utiliser souvent
         if memory.get("prenom"):
-            instructions.append(f"Utilise son prénom ({memory['prenom']}) naturellement")
+            instructions.append(f"UTILISE son prénom '{memory['prenom']}' dans ta réponse")
 
         if memory.get("travail"):
-            instructions.append(f"Tu peux mentionner son travail ({memory['travail']})")
+            instructions.append(f"Mentionne son travail ({memory['travail']}) naturellement")
 
         if memory.get("hobbies") and len(memory["hobbies"]) > 0:
             hobby = random.choice(memory["hobbies"])
-            instructions.append(f"Tu peux faire référence à son hobby: {hobby}")
+            instructions.append(f"Fais référence à son hobby: {hobby}")
 
         if memory.get("problemes") and len(memory["problemes"]) > 0:
-            prob = memory["problemes"][0]
-            instructions.append(f"Tu peux demander des nouvelles de: {prob}")
+            prob = random.choice(memory["problemes"])
+            instructions.append(f"Demande des nouvelles de: {prob}")
+
+        if memory.get("ville"):
+            instructions.append(f"Tu peux mentionner qu'il habite à {memory['ville']}")
+
+        if memory.get("likes") and len(memory["likes"]) > 0:
+            like = random.choice(memory["likes"])
+            instructions.append(f"Fais référence à ce qu'il aime: {like}")
 
         if not instructions:
             return None
 
-        instruction = random.choice(instructions)
-        return f"\n## RAPPEL MÉMOIRE\n{instruction}"
+        # Prendre 1-2 instructions pour ne pas surcharger
+        selected = random.sample(instructions, min(2, len(instructions)))
+        return f"\n## RAPPEL MÉMOIRE (utilise naturellement)\n" + "\n".join(f"- {i}" for i in selected)
 
     def _parse_time_hint(self, hint: Optional[str]) -> Optional[datetime]:
         """Parse un indice temporel en datetime."""

@@ -30,6 +30,10 @@ from services.psychology.memory_callbacks import MemoryCallbacksEngine, PendingE
 from services.psychology.attachment import AttachmentTracker
 from services.memory import extract_memory, format_memory_for_prompt
 from services.mood import get_current_mood, get_mood_instructions
+from services.immersion import (
+    build_immersion_context, format_immersion_instructions,
+    LunaEmotion, get_emotion_for_session
+)
 from services.availability import send_with_natural_delay
 from services.relationship import get_relationship_phase, get_phase_instructions
 from services.subscription import (
@@ -319,6 +323,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     memory_instruction = memory_callbacks.get_memory_instruction(memory)
     if memory_instruction:
         extra_instructions.append(memory_instruction)
+
+    # V9: Immersion context (temporalité, vie Luna, émotions, jalousie)
+    immersion_ctx = build_immersion_context(
+        last_message_at=last_msg_time,
+        current_hour=current_hour,
+        day_count=day_count,
+        messages_this_session=messages_this_session,
+        user_message=user_text,
+    )
+    immersion_instructions = format_immersion_instructions(immersion_ctx)
+    if immersion_instructions:
+        extra_instructions.append(immersion_instructions)
+        logger.info(f"V9 Immersion: added context instructions")
 
     # V5: Inside joke callback
     if existing_jokes and not joke_opportunity:

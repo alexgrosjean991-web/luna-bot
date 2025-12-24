@@ -364,3 +364,67 @@ class TestAdminAuth:
         cmd.ADMIN_TELEGRAM_ID = 0
         assert is_admin(123456) is False
         cmd.ADMIN_TELEGRAM_ID = original
+
+
+# ============== V9 IMMERSION TESTS ==============
+
+class TestImmersion:
+    """Tests pour le système d'immersion V9."""
+
+    def test_temporal_context_calculation(self):
+        from services.immersion import get_temporal_context
+        ctx = get_temporal_context(None, 14)
+        assert ctx.hours_since_last == 0.0
+        assert ctx.is_afternoon is True
+
+    def test_temporal_instruction_long_absence(self):
+        from services.immersion import get_temporal_context, get_temporal_instruction
+        from datetime import datetime, timezone, timedelta
+        old_time = datetime.now(timezone.utc) - timedelta(days=2)
+        ctx = get_temporal_context(old_time, 14)
+        instruction = get_temporal_instruction(ctx)
+        assert instruction is not None
+        assert "2 jours" in instruction
+
+    def test_luna_life_instruction(self):
+        from services.immersion import get_luna_life_instruction
+        # Test multiple times (25% probability)
+        results = [get_luna_life_instruction(day_count=3, is_weekend=False) for _ in range(100)]
+        # At least some should return instructions
+        non_none = [r for r in results if r is not None]
+        assert len(non_none) > 10  # ~25% of 100
+
+    def test_emotion_generation(self):
+        from services.immersion import get_emotion_for_session, LunaEmotion
+        emotions = [get_emotion_for_session() for _ in range(100)]
+        # Should have variety
+        unique = set(emotions)
+        assert len(unique) >= 2
+
+    def test_jealousy_detection(self):
+        from services.immersion import detect_jealousy_trigger
+        assert detect_jealousy_trigger("j'ai vu marie hier") is True
+        assert detect_jealousy_trigger("j'ai mangé une pizza") is False
+        assert detect_jealousy_trigger("avec emma on est sorti") is True
+
+    def test_open_topics_detection(self):
+        from services.immersion import detect_open_topics
+        topics = detect_open_topics("j'ai un problème au boulot")
+        assert len(topics) >= 1
+        assert topics[0].topic_type == "travail_stress"
+
+    def test_open_topics_no_match(self):
+        from services.immersion import detect_open_topics
+        topics = detect_open_topics("salut comment ça va")
+        assert len(topics) == 0
+
+    def test_build_immersion_context(self):
+        from services.immersion import build_immersion_context
+        ctx = build_immersion_context(
+            last_message_at=None,
+            current_hour=14,
+            day_count=3,
+            messages_this_session=10,
+            user_message="salut"
+        )
+        assert ctx is not None
