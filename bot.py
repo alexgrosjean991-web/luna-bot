@@ -588,6 +588,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             level_modifier = "POST_NSFW"
             logger.info(f"V7: Natural de-escalation from NSFW, applying POST_NSFW")
 
+    # FIX V7: NSFW détecté mais règles bloquent → NSFW_TEASE (pas de rejet!)
+    if detected_level >= ConversationLevel.NSFW and target_level < ConversationLevel.NSFW:
+        if level_modifier is None:  # Pas déjà AFTERCARE, etc.
+            level_modifier = "NSFW_TEASE"
+            logger.info(f"V7: NSFW detected but capped at {target_level.name}, using NSFW_TEASE")
+
     # 11. Progress emotional state if user responded
     if emotional_state == "opener":
         await set_emotional_state(user_id, "follow_up")
