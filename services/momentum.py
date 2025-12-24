@@ -299,7 +299,13 @@ class MomentumEngine:
 
         # Calculate new momentum
         intensity_score = self.INTENSITY_SCORES[intensity]
-        session_bonus = min(messages_this_session * self.SESSION_BONUS, 20)  # Cap at 20
+
+        # Session bonus: only for non-SFW messages, and scales with intensity
+        # SFW messages should NOT maintain momentum, they should let it decay
+        if intensity == Intensity.SFW:
+            session_bonus = 0  # No bonus for SFW - let momentum decay naturally
+        else:
+            session_bonus = min(messages_this_session * self.SESSION_BONUS, 20)
 
         # Apply decay then add new score
         decayed = current_momentum * self.DECAY_FACTOR

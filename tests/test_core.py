@@ -202,13 +202,23 @@ class TestMomentumEngine:
 
     def test_momentum_calculation(self):
         from services.momentum import momentum_engine, Intensity
-        # SFW message
+        # SFW message - should decay momentum (no session bonus for SFW)
         new_momentum, intensity, _ = momentum_engine.calculate_momentum(
             "salut", current_momentum=20, messages_this_session=5, day_count=3
         )
         assert intensity == Intensity.SFW
-        # Momentum increases with session bonus but should stay reasonable
-        assert new_momentum >= 20  # At least current
+        # SFW decays: 20 * 0.85 = 17
+        assert new_momentum == 17.0
+
+    def test_momentum_increases_with_flirt(self):
+        from services.momentum import momentum_engine, Intensity
+        # FLIRT message - should increase momentum
+        new_momentum, intensity, _ = momentum_engine.calculate_momentum(
+            "t'es trop mignonne", current_momentum=20, messages_this_session=5, day_count=3
+        )
+        assert intensity == Intensity.FLIRT
+        # FLIRT adds: 20*0.85 + 15 + min(5*3, 20) = 17 + 15 + 15 = 47
+        assert new_momentum > 20
 
     def test_climax_detection(self):
         from services.momentum import momentum_engine
