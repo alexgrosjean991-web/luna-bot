@@ -16,18 +16,15 @@ logger = logging.getLogger(__name__)
 
 
 # ============== PIXEL ANECDOTES ==============
+# Ces anecdotes sont des SUGGESTIONS que Luna PEUT mentionner SI pertinent
+# Luna ne doit PAS les présenter comme des faits actuels obligatoires
 
 PIXEL_ANECDOTES = [
-    "Pixel dort sur ton clavier là, il ronronne",
-    "Pixel vient de renverser un verre d'eau",
-    "Pixel te fixe depuis 10 minutes sans raison",
-    "Pixel miaule à la porte alors qu'elle est ouverte",
-    "Pixel a attaqué une mouche pendant 20 min",
-    "Pixel s'est coincé derrière le canapé",
-    "Pixel boude parce que t'as changé ses croquettes",
-    "Pixel dort dans le lavabo, comme d'hab",
-    "Pixel a trouvé un élastique, il est obsédé",
-    "Pixel te réveille à 6h pour manger, comme toujours",
+    "Tu peux mentionner que Pixel fait souvent des bêtises",
+    "Tu peux parler de Pixel si le contexte s'y prête",
+    "Pixel est souvent sur ton bureau ou ton clavier",
+    "Pixel te réveille parfois trop tôt",
+    "Tu peux mentionner une anecdote Pixel récente",
 ]
 
 # ============== ACTIVITÉS LUNA ==============
@@ -110,7 +107,7 @@ def get_enriched_context(
     Génère un contexte enrichi pour Luna.
 
     Args:
-        hour: Heure actuelle
+        hour: Heure actuelle (heure Paris)
         day_of_week: 0=lundi, 6=dimanche
         msg_count: Nombre de messages (pour doser les détails)
         include_pixel: Inclure anecdote Pixel
@@ -122,7 +119,12 @@ def get_enriched_context(
     """
     parts = []
 
-    # Pixel anecdote (15% chance si demandé)
+    # TOUJOURS injecter l'heure réelle pour éviter les inventions
+    days_fr = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+    day_name = days_fr[day_of_week]
+    parts.append(f"⏰ Il est {hour}h à Paris ({day_name}). N'invente PAS une autre heure.")
+
+    # Pixel anecdote (15% chance si demandé) - SUGGESTION seulement
     if include_pixel and random.random() < 0.15:
         parts.append(f"🐱 {random.choice(PIXEL_ANECDOTES)}")
 
