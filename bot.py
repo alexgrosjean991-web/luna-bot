@@ -726,8 +726,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if level_modifier:
             logger.info(f"V3: Recovery phase, applying {level_modifier}")
 
-    # 3. Apply soft caps based on phase
-    elif not level_modifier:
+    # 3. Apply soft caps based on phase (only for HOT/NSFW escalation attempts)
+    elif not level_modifier and intensity in (Intensity.HOT, Intensity.NSFW):
         soft_cap = momentum_engine.apply_soft_cap(intensity, day_count, messages_this_session, new_momentum)
         if soft_cap.modifier:
             level_modifier = soft_cap.modifier

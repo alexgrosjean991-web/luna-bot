@@ -67,7 +67,8 @@ HOT_KEYWORDS = [
     'corps', 'peau', 'mains sur', 'toucher', 'caresser',
     'nu', 'nue', 'déshabille', 'string', 'culotte',
     'lit', 'chaud', 'chaude', 'excité', 'excitée',
-    'embrasser', 'bouche', 'lèvres'
+    'embrasser', 'bouche', 'lèvres',
+    'enleve', 'enlève', 'retire', 'désape',  # "enleve le" etc.
 ]
 
 HOT_PATTERNS = [
