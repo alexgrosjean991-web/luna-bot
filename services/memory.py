@@ -93,11 +93,16 @@ async def extract_memory(
             data = response.json()
             result_text = data["content"][0]["text"].strip()
 
-            # Nettoyer si wrapped dans ```json
+            # Nettoyer si wrapped dans ```json (avec bounds check)
             if result_text.startswith("```"):
-                result_text = result_text.split("```")[1]
-                if result_text.startswith("json"):
-                    result_text = result_text[4:]
+                parts = result_text.split("```")
+                if len(parts) >= 2:
+                    result_text = parts[1]
+                    if result_text.startswith("json"):
+                        result_text = result_text[4:]
+                else:
+                    # Fallback: remove leading ```
+                    result_text = result_text[3:]
             result_text = result_text.strip()
 
             extracted = json.loads(result_text)

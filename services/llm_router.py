@@ -74,7 +74,9 @@ def get_llm_config_v3(
     """
     # Override 1: Recovery modifiers need Magnum (NSFW history context)
     if modifier in ("AFTERCARE", "POST_INTIMATE", "POST_NSFW"):
-        tier = 2 if modifier == "POST_INTIMATE" else 2
+        # AFTERCARE needs tier 3 for tender NSFW context
+        # POST_INTIMATE/POST_NSFW are transitioning back, tier 2
+        tier = 3 if modifier == "AFTERCARE" else 2
         logger.info(f"Router: Magnum Tier {tier} ({modifier} modifier)")
         return (*MAGNUM_CONFIG, tier)
 

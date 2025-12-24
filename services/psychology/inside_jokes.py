@@ -49,14 +49,25 @@ class InsideJoke:
 
     @classmethod
     def from_dict(cls, data: dict) -> "InsideJoke":
-        """Crée depuis un dict."""
+        """Crée depuis un dict avec gestion des erreurs de parsing."""
+        # Safe datetime parsing
+        try:
+            created_at = datetime.fromisoformat(data["created_at"])
+        except (ValueError, TypeError):
+            created_at = datetime.now()
+
+        try:
+            last_referenced = datetime.fromisoformat(data["last_referenced"]) if data.get("last_referenced") else None
+        except (ValueError, TypeError):
+            last_referenced = None
+
         return cls(
             joke_type=JokeType(data["joke_type"]),
             value=data["value"],
             context=data["context"],
-            created_at=datetime.fromisoformat(data["created_at"]),
+            created_at=created_at,
             times_referenced=data.get("times_referenced", 0),
-            last_referenced=datetime.fromisoformat(data["last_referenced"]) if data.get("last_referenced") else None
+            last_referenced=last_referenced
         )
 
 

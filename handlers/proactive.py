@@ -52,7 +52,7 @@ async def send_proactive_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
             # Recuperer phase (V7: basé sur msg_count)
             user_data = await get_user_data(user_id)
             first_message_at = user_data.get("first_message_at")
-            msg_count = user_data.get("message_count", 0)
+            msg_count = user_data.get("total_messages", 0)  # Correct column name
             phase, _ = get_relationship_phase(msg_count)
 
             # Calculer day_count pour compatibilité

@@ -36,11 +36,22 @@ class PendingEvent:
 
     @classmethod
     def from_dict(cls, data: dict) -> "PendingEvent":
-        """Crée depuis un dict."""
+        """Crée depuis un dict avec gestion des erreurs de parsing."""
+        # Safe datetime parsing
+        try:
+            expected_date = datetime.fromisoformat(data["expected_date"]) if data.get("expected_date") else None
+        except (ValueError, TypeError):
+            expected_date = None
+
+        try:
+            created_at = datetime.fromisoformat(data["created_at"])
+        except (ValueError, TypeError):
+            created_at = datetime.now()
+
         return cls(
             description=data["description"],
-            expected_date=datetime.fromisoformat(data["expected_date"]) if data.get("expected_date") else None,
-            created_at=datetime.fromisoformat(data["created_at"]),
+            expected_date=expected_date,
+            created_at=created_at,
             checked=data.get("checked", False)
         )
 

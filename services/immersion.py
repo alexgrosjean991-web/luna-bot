@@ -14,9 +14,11 @@ Features:
 
 import random
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from dataclasses import dataclass
 from enum import Enum
+
+from settings import PARIS_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +41,12 @@ def get_temporal_context(last_message_at: datetime | None, current_hour: int) ->
     """Calcule le contexte temporel."""
     hours_since_last = 0.0
     if last_message_at:
+        # Use PARIS_TZ consistently
         if last_message_at.tzinfo is None:
-            last_message_at = last_message_at.replace(tzinfo=timezone.utc)
-        hours_since_last = (datetime.now(last_message_at.tzinfo) - last_message_at).total_seconds() / 3600
+            last_message_at = last_message_at.replace(tzinfo=PARIS_TZ)
+        hours_since_last = (datetime.now(PARIS_TZ) - last_message_at).total_seconds() / 3600
 
-    now = datetime.now()
+    now = datetime.now(PARIS_TZ)
     day_of_week = now.weekday()
 
     return TemporalContext(
@@ -482,10 +485,16 @@ class OpenTopic:
 
     @classmethod
     def from_dict(cls, data: dict) -> "OpenTopic":
+        # Safe datetime parsing
+        try:
+            detected_at = datetime.fromisoformat(data["detected_at"])
+        except (ValueError, TypeError):
+            detected_at = datetime.now()
+
         return cls(
             topic_type=data["topic_type"],
             context=data["context"],
-            detected_at=datetime.fromisoformat(data["detected_at"]),
+            detected_at=detected_at,
             followed_up=data.get("followed_up", False)
         )
 
