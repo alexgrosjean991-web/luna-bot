@@ -11,6 +11,8 @@ from middleware.metrics import metrics
 from services.db import (
     get_pool, get_users_for_proactive, count_proactive_today, log_proactive,
     get_user_data, get_emotional_state, set_emotional_state,
+    get_users_for_winback, get_winback_state, update_winback_state,
+    get_users_at_churn_risk, update_churn_state, get_timing_profile,
 )
 from services.relationship import get_relationship_phase
 from services.subscription import (
@@ -22,6 +24,9 @@ from services.proactive import (
     get_message_type_for_time, should_send, get_random_message, MAX_PROACTIVE_PER_DAY
 )
 from services import conversion
+from services.winback import winback_engine, WinbackStage
+from services.churn_prediction import churn_predictor, ChurnRisk
+from services.user_timing import user_timing
 
 
 logger = logging.getLogger(__name__)
@@ -126,3 +131,146 @@ async def send_proactive_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception as e:
             metrics.record_error(f"proactive: {e}")
             logger.error(f"Error sending proactive to user {user['id']}: {e}")
+
+
+async def send_winback_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Job qui envoie les messages win-back aux utilisateurs churned."""
+    users = await get_users_for_winback()
+    now = datetime.now(PARIS_TZ)
+    current_hour = now.hour
+
+    # Ne pas envoyer la nuit
+    if current_hour < 10 or current_hour > 22:
+        return
+
+    for user in users:
+        try:
+            user_id = user["id"]
+            telegram_id = user["telegram_id"]
+            last_active = user.get("last_active")
+
+            if not last_active:
+                continue
+
+            # Calculer jours d'inactivite
+            if last_active.tzinfo is None:
+                last_active = last_active.replace(tzinfo=PARIS_TZ)
+            days_inactive = (now - last_active).days
+
+            # Recuperer etat winback
+            winback_state = await get_winback_state(user_id)
+            last_stage = winback_state.get("winback_stage")
+            last_winback_at = winback_state.get("last_winback_at")
+
+            # Determiner si on doit envoyer
+            stage = winback_engine.should_send_winback(
+                days_inactive=days_inactive,
+                last_winback_stage=last_stage,
+                last_winback_at=last_winback_at
+            )
+
+            if not stage:
+                continue
+
+            # Verifier le timing optimal
+            timing_profile = await get_timing_profile(user_id)
+            peak_hours = timing_profile.get("peak_hours", [])
+
+            if peak_hours and current_hour not in peak_hours:
+                # Pas l'heure optimale, mais si urgence haute on envoie quand meme
+                if stage not in (WinbackStage.STAGE_3, WinbackStage.STAGE_4):
+                    continue
+
+            # Generer le message
+            memory = user.get("memory", {})
+            if isinstance(memory, str):
+                memory = json.loads(memory) if memory else {}
+
+            message = winback_engine.get_winback_message(stage, memory)
+
+            # Envoyer
+            await context.bot.send_message(
+                chat_id=telegram_id,
+                text=message
+            )
+
+            # Mettre a jour l'etat
+            await update_winback_state(user_id, stage.value)
+            await log_proactive(user_id, f"winback_{stage.value}")
+
+            logger.info(f"Win-back {stage.value} sent to user {user_id} (inactive {days_inactive}d)")
+
+        except Exception as e:
+            metrics.record_error(f"winback: {e}")
+            logger.error(f"Error sending winback to user {user['id']}: {e}")
+
+
+async def check_churn_risk(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Job qui detecte et agit sur les utilisateurs a risque de churn."""
+    users = await get_users_at_churn_risk()
+    now = datetime.now(PARIS_TZ)
+    current_hour = now.hour
+
+    for user in users:
+        try:
+            user_id = user["id"]
+            telegram_id = user["telegram_id"]
+            last_active = user.get("last_active")
+
+            if not last_active:
+                continue
+
+            # Calculer heures depuis dernier message
+            if last_active.tzinfo is None:
+                last_active = last_active.replace(tzinfo=PARIS_TZ)
+            hours_inactive = (now - last_active).total_seconds() / 3600
+
+            # Construire les signaux (simplifie)
+            from services.churn_prediction import ChurnSignals
+            signals = ChurnSignals(
+                hours_since_last_message=hours_inactive,
+                avg_message_length_recent=50,  # TODO: calculer
+                avg_message_length_historical=50,
+                messages_last_24h=0,
+                messages_last_7d=user.get("total_messages", 0),
+                session_count_last_7d=1,
+                questions_asked_last_10=2,
+                user_initiated_ratio=0.5,
+                response_time_trend="stable"
+            )
+
+            # Predire le churn
+            prediction = churn_predictor.predict(signals)
+
+            # Mettre a jour l'etat
+            await update_churn_state(user_id, prediction.risk.value, prediction.score)
+
+            # Si risque moyen/haut et bon timing, envoyer message preventif
+            if prediction.risk in (ChurnRisk.MEDIUM, ChurnRisk.HIGH):
+                # Verifier timing
+                timing_profile = await get_timing_profile(user_id)
+                peak_hours = timing_profile.get("peak_hours", [20, 21])
+
+                if current_hour in peak_hours or prediction.risk == ChurnRisk.HIGH:
+                    memory = user.get("memory", {})
+                    if isinstance(memory, str):
+                        memory = json.loads(memory) if memory else {}
+
+                    # Message personnalise selon le risque
+                    if prediction.risk == ChurnRisk.HIGH:
+                        prenom = memory.get("prenom", "")
+                        message = f"hey{' ' + prenom if prenom else ''}... je pensais a toi, ca va?"
+                    else:
+                        message = "coucou, t'es passe ou? 🙈"
+
+                    await context.bot.send_message(
+                        chat_id=telegram_id,
+                        text=message
+                    )
+
+                    await log_proactive(user_id, f"churn_prevention_{prediction.risk.value}")
+                    logger.info(f"Churn prevention sent to user {user_id} (risk={prediction.risk.value})")
+
+        except Exception as e:
+            metrics.record_error(f"churn_check: {e}")
+            logger.error(f"Error checking churn for user {user['id']}: {e}")

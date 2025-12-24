@@ -20,7 +20,7 @@ from middleware.metrics import JSONFormatter
 # Import handlers
 from handlers.commands import start, health_check, debug_command, reset_command, write_health_file
 from handlers.message import handle_message
-from handlers.proactive import send_proactive_messages
+from handlers.proactive import send_proactive_messages, send_winback_messages, check_churn_risk
 
 
 # ============== Logging configuration ==============
@@ -97,6 +97,22 @@ def main() -> None:
         interval=1800,
         first=60,
         name="proactive_job"
+    )
+
+    # Phase C: Win-back - toutes les 2 heures
+    job_queue.run_repeating(
+        send_winback_messages,
+        interval=7200,
+        first=300,
+        name="winback_job"
+    )
+
+    # Phase C: Churn detection - toutes les heures
+    job_queue.run_repeating(
+        check_churn_risk,
+        interval=3600,
+        first=600,
+        name="churn_job"
     )
 
     logger.info("Luna GFE en ligne!")

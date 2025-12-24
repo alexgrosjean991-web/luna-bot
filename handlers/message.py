@@ -26,6 +26,7 @@ from services.db import (
     get_user_intent, set_user_intent, get_aha_triggered, set_aha_triggered,
     get_gates_triggered, add_gate_triggered,
     get_investment_data, update_investment, update_user_segment,
+    reset_winback_state,
 )
 from services.psychology.variable_rewards import VariableRewardsEngine, RewardContext
 from services.psychology.inside_jokes import InsideJokesEngine, InsideJoke
@@ -123,6 +124,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     is_new_session = hours_since_last > 4
     if is_new_session:
         await increment_session_count(user_id)
+
+    # Phase C: Reset winback si user revient apres longue absence (>24h)
+    if hours_since_last > 24:
+        await reset_winback_state(user_id)
+        logger.info(f"User {user_id} returned after {hours_since_last:.0f}h, winback reset")
 
     # 3. Sauvegarder message user
     await save_message(user_id, "user", user_text)

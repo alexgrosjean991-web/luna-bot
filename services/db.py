@@ -937,3 +937,160 @@ async def update_user_segment(user_id: int, segment: str) -> None:
             "UPDATE users SET user_segment = $1 WHERE id = $2",
             segment, user_id
         )
+
+
+# ============== PHASE C: Churn + Win-back ==============
+
+async def get_churn_state(user_id: int) -> dict:
+    """Récupère l'état de churn d'un utilisateur."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT
+                COALESCE(churn_risk, 'low') as churn_risk,
+                COALESCE(churn_score, 0) as churn_score,
+                last_churn_check
+            FROM users WHERE id = $1
+        """, user_id)
+
+        if not row:
+            return {
+                "churn_risk": "low",
+                "churn_score": 0,
+                "last_churn_check": None
+            }
+
+        return dict(row)
+
+
+async def update_churn_state(user_id: int, risk: str, score: float) -> None:
+    """Met à jour l'état de churn."""
+    async with get_pool().acquire() as conn:
+        await conn.execute("""
+            UPDATE users SET
+                churn_risk = $2,
+                churn_score = $3,
+                last_churn_check = NOW()
+            WHERE id = $1
+        """, user_id, risk, score)
+
+
+async def get_winback_state(user_id: int) -> dict:
+    """Récupère l'état win-back d'un utilisateur."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT
+                winback_stage,
+                last_winback_at,
+                COALESCE(winback_attempts, 0) as winback_attempts
+            FROM users WHERE id = $1
+        """, user_id)
+
+        if not row:
+            return {
+                "winback_stage": None,
+                "last_winback_at": None,
+                "winback_attempts": 0
+            }
+
+        return dict(row)
+
+
+async def update_winback_state(user_id: int, stage: str) -> None:
+    """Met à jour l'état win-back après envoi."""
+    async with get_pool().acquire() as conn:
+        await conn.execute("""
+            UPDATE users SET
+                winback_stage = $2,
+                last_winback_at = NOW(),
+                winback_attempts = winback_attempts + 1
+            WHERE id = $1
+        """, user_id, stage)
+
+
+async def reset_winback_state(user_id: int) -> None:
+    """Reset le win-back quand l'utilisateur revient."""
+    async with get_pool().acquire() as conn:
+        await conn.execute("""
+            UPDATE users SET
+                winback_stage = NULL,
+                winback_attempts = 0,
+                churn_risk = 'low',
+                churn_score = 0
+            WHERE id = $1
+        """, user_id)
+
+
+async def get_timing_profile(user_id: int) -> dict:
+    """Récupère le profil temporel d'un utilisateur."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT
+                COALESCE(peak_hours, '[]'::jsonb) as peak_hours,
+                COALESCE(active_days, '[]'::jsonb) as active_days,
+                avg_response_time
+            FROM users WHERE id = $1
+        """, user_id)
+
+        if not row:
+            return {
+                "peak_hours": [],
+                "active_days": [],
+                "avg_response_time": None
+            }
+
+        peak = row["peak_hours"]
+        days = row["active_days"]
+
+        return {
+            "peak_hours": json.loads(peak) if isinstance(peak, str) else peak,
+            "active_days": json.loads(days) if isinstance(days, str) else days,
+            "avg_response_time": row["avg_response_time"]
+        }
+
+
+async def update_timing_profile(
+    user_id: int,
+    peak_hours: list[int],
+    active_days: list[int],
+    avg_response_time: float
+) -> None:
+    """Met à jour le profil temporel."""
+    async with get_pool().acquire() as conn:
+        await conn.execute("""
+            UPDATE users SET
+                peak_hours = $2,
+                active_days = $3,
+                avg_response_time = $4
+            WHERE id = $1
+        """, user_id, json.dumps(peak_hours), json.dumps(active_days), avg_response_time)
+
+
+async def get_users_for_winback() -> list[dict]:
+    """Récupère les utilisateurs éligibles au win-back."""
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT
+                id, telegram_id, memory, last_active,
+                winback_stage, last_winback_at, winback_attempts
+            FROM users
+            WHERE last_active < NOW() - INTERVAL '7 days'
+            AND (winback_stage IS NULL OR winback_stage != 'exhausted')
+            AND subscription_status != 'active'
+        """)
+        return [dict(row) for row in rows]
+
+
+async def get_users_at_churn_risk() -> list[dict]:
+    """Récupère les utilisateurs à risque de churn."""
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT
+                id, telegram_id, memory, last_active,
+                churn_risk, churn_score,
+                total_messages, attachment_score
+            FROM users
+            WHERE last_active < NOW() - INTERVAL '24 hours'
+            AND last_active > NOW() - INTERVAL '7 days'
+            AND subscription_status != 'active'
+        """)
+        return [dict(row) for row in rows]
