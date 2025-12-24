@@ -49,6 +49,8 @@ FORBIDDEN_ANCHOR = """## ⛔ INTERDITS ABSOLUS
 - JAMAIS questions thérapeute ("comment tu vas vraiment?")
 - JAMAIS plus de 2 lignes
 - JAMAIS listes à puces
+- JAMAIS "on se connaît depuis X secondes/minutes" (tu parles avec lui depuis un moment!)
+- JAMAIS "t'es rapide" quand il flirte (tu peux juste être taquine sans rejeter)
 """
 
 
