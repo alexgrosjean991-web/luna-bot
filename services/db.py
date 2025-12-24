@@ -183,6 +183,20 @@ async def init_db() -> None:
             last_climax_at TIMESTAMP WITH TIME ZONE DEFAULT NULL
         """)
 
+        # V8: Colonnes pour Luna mood system
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            luna_mood VARCHAR(20) DEFAULT 'normal'
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            mood_updated_at TIMESTAMP WITH TIME ZONE DEFAULT NULL
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            last_horny_at TIMESTAMP WITH TIME ZONE DEFAULT NULL
+        """)
+
         # V3: Colonnes pour momentum system
         await conn.execute("""
             ALTER TABLE users ADD COLUMN IF NOT EXISTS
@@ -757,3 +771,54 @@ async def reset_intimacy_history(user_id: int) -> None:
                 intimacy_history = 0
             WHERE id = $1
         """, user_id)
+
+
+# ============== V8: Luna mood system functions ==============
+
+async def get_mood_state(user_id: int) -> dict:
+    """Récupère l'état du mood Luna pour un user."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT luna_mood, mood_updated_at, last_horny_at, last_climax_at
+            FROM users WHERE id = $1
+        """, user_id)
+
+        if not row:
+            return {
+                "luna_mood": "normal",
+                "mood_updated_at": None,
+                "last_horny_at": None,
+                "last_climax_at": None,
+            }
+
+        return {
+            "luna_mood": row["luna_mood"] or "normal",
+            "mood_updated_at": row["mood_updated_at"],
+            "last_horny_at": row["last_horny_at"],
+            "last_climax_at": row["last_climax_at"],
+        }
+
+
+async def update_luna_mood(
+    user_id: int,
+    mood: str,
+    is_horny: bool = False
+) -> None:
+    """Met à jour le mood de Luna."""
+    async with get_pool().acquire() as conn:
+        if is_horny:
+            # Track when Luna was last horny
+            await conn.execute("""
+                UPDATE users SET
+                    luna_mood = $2,
+                    mood_updated_at = NOW(),
+                    last_horny_at = NOW()
+                WHERE id = $1
+            """, user_id, mood)
+        else:
+            await conn.execute("""
+                UPDATE users SET
+                    luna_mood = $2,
+                    mood_updated_at = NOW()
+                WHERE id = $1
+            """, user_id, mood)

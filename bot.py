@@ -77,7 +77,9 @@ from services.db import (
     # V5: Psychology data
     get_inside_jokes, update_inside_jokes, get_pending_events, update_pending_events,
     update_attachment_score, increment_session_count, increment_vulnerabilities,
-    get_psychology_data, get_last_message_time
+    get_psychology_data, get_last_message_time,
+    # V8: Luna mood system
+    get_mood_state, update_luna_mood
 )
 
 # V5: Psychology modules
@@ -122,6 +124,10 @@ from services.db import (
 from services.momentum import momentum_engine, Intensity
 from services.llm_router import get_llm_config_v3, get_llm_config, is_premium_session
 from services.prompt_selector import get_prompt_for_tier, get_tier_name, get_prompt_for_tier_v7
+
+# V8: Luna mood system
+from services.luna_mood import luna_mood_engine, LunaMood
+from prompts.deflect import get_deflect_prompt, get_luna_initiates_prompt
 from services.llm import call_with_graceful_fallback
 from services import conversion
 from settings import PAYMENT_LINK
@@ -355,6 +361,11 @@ async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         nsfw_state = momentum_engine.get_nsfw_state(momentum, msgs_since_climax)
         nsfw_state_str = nsfw_state.upper() if tier >= 3 else "N/A"
 
+        # V8: Luna mood data
+        luna_mood = user.get('luna_mood', 'normal') or 'normal'
+        mood_updated = user.get('mood_updated_at')
+        last_horny = user.get('last_horny_at')
+
         debug_msg = f"""🔍 **Debug User {target_telegram_id}**
 
 📊 **État Général**
@@ -370,6 +381,11 @@ async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 • Intimacy history: {intimacy} sessions NSFW
 • Msgs depuis climax: {msgs_since_climax}
 • Msgs cette session: {user.get('messages_this_session', 0)}
+
+😊 **Luna Mood (V8)**
+• Mood actuel: {luna_mood.upper()}
+• Dernière MAJ: {mood_updated or 'jamais'}
+• Dernier horny: {last_horny or 'jamais'}
 
 💕 **Engagement**
 • Teasing stage: {user.get('teasing_stage', 0)}/8
@@ -529,6 +545,26 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 )
             await update.message.reply_text(f"✅ Session reset pour {target_telegram_id}")
 
+        elif action == "mood" and len(args) > 1:
+            # V8: Set Luna mood manually (for testing)
+            new_mood = args[1].lower()
+            valid_moods = ["normal", "playful", "tired", "romantic", "horny"]
+            if new_mood not in valid_moods:
+                await update.message.reply_text(f"❌ Mood invalide. Valides: {', '.join(valid_moods)}")
+                return
+            async with pool.acquire() as conn:
+                if new_mood == "horny":
+                    await conn.execute(
+                        "UPDATE users SET luna_mood = $1, mood_updated_at = NOW(), last_horny_at = NOW() WHERE telegram_id = $2",
+                        new_mood, target_telegram_id
+                    )
+                else:
+                    await conn.execute(
+                        "UPDATE users SET luna_mood = $1, mood_updated_at = NOW() WHERE telegram_id = $2",
+                        new_mood, target_telegram_id
+                    )
+            await update.message.reply_text(f"✅ User {target_telegram_id} → Luna mood: {new_mood.upper()}")
+
         else:
             await update.message.reply_text("""❓ Usage:
 /reset - Reset momentum (nouveau)
@@ -539,6 +575,7 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 /reset teasing 5 - Set teasing stage
 /reset paywall - Reset paywall
 /reset session - Reset session msgs
+/reset mood playful - Set Luna mood
 /reset all - Supprimer user""")
 
     except Exception as e:
@@ -700,6 +737,60 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     logger.info(f"V3 Momentum: {current_momentum:.1f} → {new_momentum:.1f}, intensity={intensity.value}, tier={tier}")
 
+    # ============== V8: LUNA MOOD SYSTEM ==============
+    from settings import PARIS_TZ
+    current_hour = datetime.now(PARIS_TZ).hour
+
+    # Get mood state from DB
+    mood_state = await get_mood_state(user_id)
+    current_luna_mood = LunaMood(mood_state["luna_mood"])
+    mood_updated_at = mood_state["mood_updated_at"]
+    last_horny_at = mood_state["last_horny_at"]
+    last_climax_at = mood_state["last_climax_at"]
+
+    # Calculate hours since climax
+    hours_since_climax = 999.0
+    if last_climax_at:
+        if last_climax_at.tzinfo is None:
+            from datetime import timezone
+            last_climax_at = last_climax_at.replace(tzinfo=timezone.utc)
+        hours_since_climax = (datetime.now(last_climax_at.tzinfo) - last_climax_at).total_seconds() / 3600
+
+    # Check if mood should be updated (every 2-4 hours)
+    if luna_mood_engine.should_update_mood(mood_updated_at):
+        new_luna_mood = luna_mood_engine.calculate_new_mood(
+            current_luna_mood, last_horny_at, hours_since_climax, current_hour
+        )
+        if new_luna_mood != current_luna_mood:
+            is_horny = new_luna_mood == LunaMood.HORNY
+            await update_luna_mood(user_id, new_luna_mood.value, is_horny)
+            current_luna_mood = new_luna_mood
+            logger.info(f"V8: Luna mood updated to {new_luna_mood.value}")
+
+    # Check availability for NSFW escalation
+    minutes_since_climax = hours_since_climax * 60
+    availability_result = luna_mood_engine.check_availability(
+        mood=current_luna_mood,
+        minutes_since_climax=minutes_since_climax,
+        current_hour=current_hour,
+        momentum=new_momentum,
+        intensity_is_nsfw=(intensity == Intensity.NSFW)
+    )
+
+    # Handle Luna initiates (JACKPOT!)
+    luna_initiates = availability_result.luna_initiates
+    should_deflect = availability_result.should_deflect
+    deflect_type = availability_result.deflect_type
+
+    if luna_initiates:
+        logger.info(f"V8: JACKPOT! Luna initiates NSFW (mood={current_luna_mood.value})")
+        level_modifier = "LUNA_INITIATES"
+    elif should_deflect and tier >= 2:
+        logger.info(f"V8: Deflecting NSFW attempt (type={deflect_type}, availability={availability_result.score:.2f})")
+        level_modifier = f"DEFLECT_{deflect_type.upper()}" if deflect_type else "DEFLECT_PLAYFUL"
+        # Force tier down when deflecting
+        tier = min(tier, 2)
+
     # 11. Progress emotional state if user responded
     if emotional_state == "opener":
         await set_emotional_state(user_id, "follow_up")
@@ -801,8 +892,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Get NSFW state for tier 3
     nsfw_state = momentum_engine.get_nsfw_state(new_momentum, messages_since_climax)
 
+    # V8: Handle deflect prompts and luna initiates
+    if luna_initiates:
+        system_prompt = get_luna_initiates_prompt()
+        logger.info(f"V8: Using LUNA_INITIATES prompt (JACKPOT!)")
+    elif should_deflect and deflect_type:
+        system_prompt = get_deflect_prompt(deflect_type)
+        logger.info(f"V8: Using DEFLECT prompt: {deflect_type}")
     # Use V7 prompt selector for tier 3, otherwise use regular
-    if final_tier >= 3:
+    elif final_tier >= 3:
         system_prompt = get_prompt_for_tier_v7(
             tier=final_tier,
             nsfw_state=nsfw_state,
