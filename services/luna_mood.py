@@ -240,8 +240,9 @@ class LunaMoodEngine:
                     luna_initiates=True
                 )
 
-        # If user is trying to escalate to NSFW
-        if intensity_is_nsfw or momentum > 60:
+        # If user is trying to escalate to NSFW (only check on NSFW messages, not high momentum alone)
+        # High momentum doesn't mean user is currently trying to escalate
+        if intensity_is_nsfw:
             roll = random.random()
 
             if roll > availability:

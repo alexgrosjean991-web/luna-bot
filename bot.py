@@ -767,14 +767,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             current_luna_mood = new_luna_mood
             logger.info(f"V8: Luna mood updated to {new_luna_mood.value}")
 
-    # Check availability for NSFW escalation
+    # Check availability for NSFW escalation (HOT or NSFW intensity)
     minutes_since_climax = hours_since_climax * 60
+    is_escalating = intensity in (Intensity.HOT, Intensity.NSFW)
     availability_result = luna_mood_engine.check_availability(
         mood=current_luna_mood,
         minutes_since_climax=minutes_since_climax,
         current_hour=current_hour,
         momentum=new_momentum,
-        intensity_is_nsfw=(intensity == Intensity.NSFW)
+        intensity_is_nsfw=is_escalating
     )
 
     # Handle Luna initiates (JACKPOT!)
