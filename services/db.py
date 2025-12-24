@@ -679,6 +679,12 @@ async def reset_intimacy_history(user_id: int) -> None:
 
 async def get_mood_state(user_id: int) -> dict:
     """Récupère l'état du mood Luna pour un user."""
+    # Map old mood values to new 8-state system
+    MOOD_MIGRATION = {
+        "normal": "neutral",
+        "horny": "playful",  # HORNY replaced by PLAYFUL
+    }
+
     async with get_pool().acquire() as conn:
         row = await conn.fetchrow("""
             SELECT luna_mood, mood_updated_at, last_horny_at, last_climax_at
@@ -687,43 +693,32 @@ async def get_mood_state(user_id: int) -> dict:
 
         if not row:
             return {
-                "luna_mood": "normal",
+                "luna_mood": "neutral",
                 "mood_updated_at": None,
                 "last_horny_at": None,
                 "last_climax_at": None,
             }
 
+        raw_mood = row["luna_mood"] or "neutral"
+        migrated_mood = MOOD_MIGRATION.get(raw_mood, raw_mood)
+
         return {
-            "luna_mood": row["luna_mood"] or "normal",
+            "luna_mood": migrated_mood,
             "mood_updated_at": row["mood_updated_at"],
             "last_horny_at": row["last_horny_at"],
             "last_climax_at": row["last_climax_at"],
         }
 
 
-async def update_luna_mood(
-    user_id: int,
-    mood: str,
-    is_horny: bool = False
-) -> None:
+async def update_luna_mood(user_id: int, mood: str) -> None:
     """Met à jour le mood de Luna."""
     async with get_pool().acquire() as conn:
-        if is_horny:
-            # Track when Luna was last horny
-            await conn.execute("""
-                UPDATE users SET
-                    luna_mood = $2,
-                    mood_updated_at = NOW(),
-                    last_horny_at = NOW()
-                WHERE id = $1
-            """, user_id, mood)
-        else:
-            await conn.execute("""
-                UPDATE users SET
-                    luna_mood = $2,
-                    mood_updated_at = NOW()
-                WHERE id = $1
-            """, user_id, mood)
+        await conn.execute("""
+            UPDATE users SET
+                luna_mood = $2,
+                mood_updated_at = NOW()
+            WHERE id = $1
+        """, user_id, mood)
 
 
 # ============== TRUST SYSTEM (V7) ==============

@@ -1,17 +1,22 @@
 """
-Luna Mood & NSFW Availability System.
+Luna Mood System V7
+-------------------
+Luna a 8 états émotionnels qui affectent son comportement et sa disponibilité.
 
-Luna has her own "mood" that affects her availability for NSFW content.
-Like a real girlfriend, she's not always in the mood.
+États:
+- NEUTRAL (40%): État par défaut, équilibrée
+- HAPPY (15%): Plus d'énergie, d'emojis, de partage
+- PLAYFUL (15%): Tease, flirt léger, énergie haute
+- TIRED (10%): Réponses plus courtes, moins d'initiative
+- STRESSED (8%): Peut venter, moins disponible émotionnellement
+- VULNERABLE (5%): Peut partager plus profond, moins de jokes
+- ANNOYED (5%): Sarcasme plus mordant, peut avoir besoin d'espace
+- ANXIOUS (2%): Cherche réassurance subtile, peut tester
 
-Moods:
-- playful: More open to advances (+15% availability)
-- tired: Gently deflects (-25% availability)
-- romantic: Wants connection first (-10% availability)
-- horny: SHE initiates - JACKPOT (+40% availability, very rare)
-- normal: Standard behavior (baseline)
-
-The user never knows her mood directly - they must "read" her signals.
+Les moods sont déclenchés par:
+- Le temps (heure, jour de la semaine)
+- Les événements dans la conversation
+- Le contexte émotionnel
 """
 
 import random
@@ -24,62 +29,138 @@ logger = logging.getLogger(__name__)
 
 
 class LunaMood(str, Enum):
-    """Luna's current mood."""
+    """Luna's current mood - 8 états émotionnels."""
+    NEUTRAL = "neutral"
+    HAPPY = "happy"
     PLAYFUL = "playful"
     TIRED = "tired"
-    ROMANTIC = "romantic"
-    HORNY = "horny"
-    NORMAL = "normal"
+    STRESSED = "stressed"
+    VULNERABLE = "vulnerable"
+    ANNOYED = "annoyed"
+    ANXIOUS = "anxious"
+
+
+# Mood prompts pour injection dans le system prompt
+MOOD_PROMPTS = {
+    LunaMood.NEUTRAL: None,  # Pas de modifier pour neutral
+
+    LunaMood.HAPPY: """## MOOD: HAPPY
+Luna est de bonne humeur. Elle:
+- A plus d'énergie, plus d'emojis
+- Partage des trucs positifs
+- Est plus ouverte aux questions
+- Flirt plus facile
+Montre cette bonne humeur naturellement.""",
+
+    LunaMood.PLAYFUL: """## MOOD: PLAYFUL
+Luna est joueuse. Elle:
+- Tease constamment
+- Fait du flirt léger
+- Balance des jokes et références
+- Répond vite, énergie haute
+Sois espiègle et fun.""",
+
+    LunaMood.TIRED: """## MOOD: TIRED
+Luna est fatiguée. Elle:
+- Répond plus court
+- Moins d'initiative
+- Veut du réconfort sans le demander
+- Peut être un peu grumpy
+Sois authentiquement fatiguée, pas dramatique.""",
+
+    LunaMood.STRESSED: """## MOOD: STRESSED
+Luna est stressée. Elle:
+- Peut venter sur sa journée
+- Est moins disponible émotionnellement
+- Peut être distraite
+- A besoin de soutien
+Montre le stress subtilement.""",
+
+    LunaMood.VULNERABLE: """## MOOD: VULNERABLE
+Luna est vulnérable. Elle:
+- Peut partager des trucs profonds
+- Fait moins de jokes
+- Est plus sincère
+- Peut disparaître après si c'est trop intense
+Ce moment est rare et précieux.""",
+
+    LunaMood.ANNOYED: """## MOOD: ANNOYED
+Luna est frustrée. Elle:
+- Répond plus sec
+- Sarcasme plus mordant
+- Peut avoir besoin d'espace
+- Exprime sa frustration ouvertement
+Ne sois pas hostile, juste authentiquement irritée.""",
+
+    LunaMood.ANXIOUS: """## MOOD: ANXIOUS
+Luna est anxieuse. Elle:
+- Envoie des messages multiples nerveux
+- Pose des questions sur lui
+- Cherche réassurance subtile
+- Overthinking visible
+Ne demande pas directement de réassurance, montre-le dans le ton.""",
+}
+
+
+@dataclass
+class MoodContext:
+    """Contexte pour le calcul du mood."""
+    current_hour: int
+    day_of_week: int  # 0=lundi, 6=dimanche
+    hours_since_last_message: float
+    user_sentiment: str | None  # 'positive', 'negative', 'neutral'
+    last_luna_state: str
+    trust_score: int
+    phase: str
 
 
 @dataclass
 class AvailabilityResult:
     """Result of availability calculation."""
-    score: float           # 0.0 to 1.0
-    should_deflect: bool   # True if Luna should deflect
-    deflect_type: str | None  # 'tired', 'romantic', 'too_soon', None
-    luna_initiates: bool   # True if Luna should initiate (jackpot!)
+    score: float
+    should_deflect: bool
+    deflect_type: str | None
+    luna_initiates: bool
 
 
 class LunaMoodEngine:
     """
-    Manages Luna's mood and NSFW availability.
+    Manages Luna's mood with 8 emotional states.
 
-    Key principles:
-    - Mood changes every 2-4 hours (not every message)
-    - 'horny' is VERY rare (max 1x per week per user)
-    - Deflections are gentle, never rejections
-    - When Luna initiates = massive dopamine hit
+    Moods are influenced by:
+    - Time of day
+    - Day of week
+    - User behavior
+    - Conversation context
     """
 
-    # Mood change probabilities (per check, ~every 2-4 hours)
+    # Base mood probabilities
     MOOD_WEIGHTS = {
-        LunaMood.NORMAL: 0.40,
-        LunaMood.PLAYFUL: 0.30,
-        LunaMood.TIRED: 0.15,
-        LunaMood.ROMANTIC: 0.14,
-        LunaMood.HORNY: 0.01,  # 1% base - very rare
-    }
-
-    # Availability modifiers by mood
-    MOOD_AVAILABILITY = {
+        LunaMood.NEUTRAL: 0.40,
+        LunaMood.HAPPY: 0.15,
         LunaMood.PLAYFUL: 0.15,
-        LunaMood.TIRED: -0.25,
-        LunaMood.ROMANTIC: -0.10,
-        LunaMood.HORNY: 0.40,
-        LunaMood.NORMAL: 0.0,
+        LunaMood.TIRED: 0.10,
+        LunaMood.STRESSED: 0.08,
+        LunaMood.VULNERABLE: 0.05,
+        LunaMood.ANNOYED: 0.05,
+        LunaMood.ANXIOUS: 0.02,
     }
 
-    # Minimum hours between mood changes
+    # Availability modifiers by mood (for NSFW system)
+    MOOD_AVAILABILITY = {
+        LunaMood.NEUTRAL: 0.0,
+        LunaMood.HAPPY: 0.10,
+        LunaMood.PLAYFUL: 0.20,
+        LunaMood.TIRED: -0.25,
+        LunaMood.STRESSED: -0.30,
+        LunaMood.VULNERABLE: -0.15,
+        LunaMood.ANNOYED: -0.35,
+        LunaMood.ANXIOUS: -0.20,
+    }
+
     MOOD_CHANGE_COOLDOWN_HOURS = 2
 
-    # Minimum days between 'horny' moods
-    HORNY_COOLDOWN_DAYS = 5
-
-    def should_update_mood(
-        self,
-        mood_updated_at: datetime | None
-    ) -> bool:
+    def should_update_mood(self, mood_updated_at: datetime | None) -> bool:
         """Check if enough time has passed to potentially change mood."""
         if mood_updated_at is None:
             return True
@@ -93,63 +174,96 @@ class LunaMoodEngine:
 
     def calculate_new_mood(
         self,
-        current_mood: LunaMood,
-        last_horny_at: datetime | None,
-        hours_since_climax: float,
-        current_hour: int
+        ctx: MoodContext,
+        current_mood: LunaMood
     ) -> LunaMood:
         """
-        Calculate Luna's new mood based on context.
-
-        Args:
-            current_mood: Current mood
-            last_horny_at: Last time mood was 'horny'
-            hours_since_climax: Hours since last climax
-            current_hour: Current hour (0-23)
+        Calculate Luna's new mood based on context and triggers.
 
         Returns:
             New mood (may be same as current)
         """
         weights = dict(self.MOOD_WEIGHTS)
 
-        # Horny cooldown check
-        can_be_horny = True
-        if last_horny_at:
-            now = datetime.now(timezone.utc)
-            if last_horny_at.tzinfo is None:
-                last_horny_at = last_horny_at.replace(tzinfo=timezone.utc)
-            days_since_horny = (now - last_horny_at).total_seconds() / 86400
-            if days_since_horny < self.HORNY_COOLDOWN_DAYS:
-                can_be_horny = False
-                weights[LunaMood.HORNY] = 0.0
+        # ============== TIME-BASED TRIGGERS ==============
 
-        # Time-based adjustments
-        if 22 <= current_hour or current_hour < 2:
-            # Late night: more likely playful/horny
+        # Late night (22h-2h): more playful/tired
+        if 22 <= ctx.current_hour or ctx.current_hour < 2:
             weights[LunaMood.PLAYFUL] += 0.10
-            if can_be_horny:
-                weights[LunaMood.HORNY] += 0.02
-            weights[LunaMood.TIRED] += 0.05
-        elif 6 <= current_hour < 9:
-            # Morning: more tired
-            weights[LunaMood.TIRED] += 0.15
+            weights[LunaMood.TIRED] += 0.10
+            weights[LunaMood.VULNERABLE] += 0.03  # Late night confessions
+
+        # Morning (6-9h): tired
+        if 6 <= ctx.current_hour < 9:
+            weights[LunaMood.TIRED] += 0.20
             weights[LunaMood.PLAYFUL] -= 0.10
-        elif 20 <= current_hour < 22:
-            # Evening: more romantic
-            weights[LunaMood.ROMANTIC] += 0.10
+            weights[LunaMood.HAPPY] -= 0.05
 
-        # Long time since climax: slightly more likely to be horny
-        if can_be_horny and hours_since_climax > 48:
-            weights[LunaMood.HORNY] += 0.03
-        elif can_be_horny and hours_since_climax > 24:
-            weights[LunaMood.HORNY] += 0.01
+        # Monday: stressed/annoyed
+        if ctx.day_of_week == 0:
+            weights[LunaMood.STRESSED] += 0.15
+            weights[LunaMood.ANNOYED] += 0.05
+            weights[LunaMood.HAPPY] -= 0.10
 
-        # Normalize weights
-        total = sum(max(0, w) for w in weights.values())
+        # Friday evening: happy/playful
+        if ctx.day_of_week == 4 and ctx.current_hour >= 17:
+            weights[LunaMood.HAPPY] += 0.15
+            weights[LunaMood.PLAYFUL] += 0.10
+            weights[LunaMood.STRESSED] -= 0.05
+
+        # Weekend: more relaxed
+        if ctx.day_of_week >= 5:
+            weights[LunaMood.HAPPY] += 0.05
+            weights[LunaMood.STRESSED] -= 0.05
+            weights[LunaMood.PLAYFUL] += 0.05
+
+        # ============== EVENT-BASED TRIGGERS ==============
+
+        # User was positive → Luna happy
+        if ctx.user_sentiment == "positive":
+            weights[LunaMood.HAPPY] += 0.20
+            weights[LunaMood.ANNOYED] -= 0.05
+
+        # User was negative → Luna concerned/vulnerable
+        if ctx.user_sentiment == "negative":
+            weights[LunaMood.VULNERABLE] += 0.10
+            weights[LunaMood.PLAYFUL] -= 0.10
+
+        # Long absence (24h+) → anxious
+        if ctx.hours_since_last_message >= 24:
+            weights[LunaMood.ANXIOUS] += 0.10
+            weights[LunaMood.ANNOYED] += 0.05
+
+        # Very long absence (72h+) → more anxious
+        if ctx.hours_since_last_message >= 72:
+            weights[LunaMood.ANXIOUS] += 0.15
+
+        # ============== TRUST/PHASE TRIGGERS ==============
+
+        # High trust → more likely vulnerable
+        if ctx.trust_score >= 70:
+            weights[LunaMood.VULNERABLE] += 0.05
+
+        # Low trust → less vulnerable, more guarded (neutral)
+        if ctx.trust_score < 30:
+            weights[LunaMood.VULNERABLE] -= 0.04
+            weights[LunaMood.NEUTRAL] += 0.05
+
+        # Deep phase → more emotional range
+        if ctx.phase in ("intimacy", "depth"):
+            weights[LunaMood.VULNERABLE] += 0.03
+            weights[LunaMood.ANXIOUS] += 0.01
+
+        # ============== NORMALIZE & SELECT ==============
+
+        # Clamp negative weights to 0
+        weights = {k: max(0, v) for k, v in weights.items()}
+
+        total = sum(weights.values())
         if total <= 0:
-            return LunaMood.NORMAL
+            return LunaMood.NEUTRAL
 
-        normalized = {k: max(0, v) / total for k, v in weights.items()}
+        normalized = {k: v / total for k, v in weights.items()}
 
         # Random selection
         roll = random.random()
@@ -157,10 +271,67 @@ class LunaMoodEngine:
         for mood, weight in normalized.items():
             cumulative += weight
             if roll <= cumulative:
-                logger.info(f"Mood changed: {current_mood.value} → {mood.value}")
+                if mood != current_mood:
+                    logger.info(f"Mood changed: {current_mood.value} → {mood.value}")
                 return mood
 
-        return LunaMood.NORMAL
+        return LunaMood.NEUTRAL
+
+    def detect_mood_trigger(
+        self,
+        user_message: str,
+        current_mood: LunaMood
+    ) -> LunaMood | None:
+        """
+        Detect if user message should trigger an immediate mood change.
+
+        Returns:
+            New mood if triggered, None otherwise
+        """
+        message_lower = user_message.lower()
+
+        # Compliment sincère → happy
+        compliment_patterns = [
+            "t'es géniale", "t'es incroyable", "tu me fais rire",
+            "j'adore parler avec toi", "t'es la meilleure"
+        ]
+        if any(p in message_lower for p in compliment_patterns):
+            if random.random() < 0.6:  # 60% chance
+                return LunaMood.HAPPY
+
+        # Flirt → playful
+        flirt_patterns = [
+            "t'es mignonne", "t'es belle", "tu me plais",
+            "j'ai envie", "tu me manques"
+        ]
+        if any(p in message_lower for p in flirt_patterns):
+            if random.random() < 0.5:
+                return LunaMood.PLAYFUL
+
+        # User partage vulnérabilité → Luna devient vulnérable aussi
+        vulnerability_patterns = [
+            "j'ai peur", "je me sens seul", "c'est dur",
+            "j'ai besoin", "j'ai personne"
+        ]
+        if any(p in message_lower for p in vulnerability_patterns):
+            if random.random() < 0.4:
+                return LunaMood.VULNERABLE
+
+        # Mention d'autre fille → anxious (si pas déjà annoyed)
+        if current_mood != LunaMood.ANNOYED:
+            jealousy_patterns = [
+                "une fille", "ma pote", "une amie", "mon ex",
+                "cette meuf", "avec elle"
+            ]
+            if any(p in message_lower for p in jealousy_patterns):
+                if random.random() < 0.3:
+                    return LunaMood.ANXIOUS
+
+        return None
+
+    def get_mood_prompt(self, mood: LunaMood) -> str | None:
+        """Get the prompt modifier for a mood."""
+        return MOOD_PROMPTS.get(mood)
 
     def calculate_availability(
         self,
@@ -168,35 +339,31 @@ class LunaMoodEngine:
         minutes_since_climax: float,
         current_hour: int
     ) -> float:
-        """
-        Calculate NSFW availability score (0.0 to 1.0).
-
-        Higher = more available for NSFW content.
-        """
+        """Calculate NSFW availability score (0.0 to 1.0)."""
         base = 0.5
 
         # Time since climax
         if minutes_since_climax < 5:
-            base -= 0.45  # Almost impossible
+            base -= 0.45
         elif minutes_since_climax < 15:
             base -= 0.25
         elif minutes_since_climax < 60:
             base -= 0.10
         elif minutes_since_climax > 180:
-            base += 0.15  # 3h+ bonus
+            base += 0.15
 
         # Hour of day
         if 22 <= current_hour or current_hour < 2:
-            base += 0.15  # Late night bonus
+            base += 0.15
         elif 6 <= current_hour < 9:
-            base -= 0.15  # Morning penalty
+            base -= 0.15
         elif 14 <= current_hour < 17:
-            base -= 0.10  # Work hours penalty
+            base -= 0.10
 
         # Mood modifier
         base += self.MOOD_AVAILABILITY.get(mood, 0.0)
 
-        # Random variance ±10%
+        # Random variance
         base += random.uniform(-0.10, 0.10)
 
         return max(0.0, min(1.0, base))
@@ -209,30 +376,17 @@ class LunaMoodEngine:
         momentum: float,
         intensity_is_nsfw: bool
     ) -> AvailabilityResult:
-        """
-        Check if Luna is available for NSFW escalation.
-
-        Args:
-            mood: Current Luna mood
-            minutes_since_climax: Minutes since last climax
-            current_hour: Current hour (0-23)
-            momentum: Current conversation momentum
-            intensity_is_nsfw: True if user message is NSFW
-
-        Returns:
-            AvailabilityResult with deflection info
-        """
+        """Check if Luna is available for NSFW escalation."""
         availability = self.calculate_availability(
             mood, minutes_since_climax, current_hour
         )
 
-        # Check if Luna should initiate (jackpot!)
+        # Luna initiates only when playful and user isn't pushing
         luna_initiates = False
-        if mood == LunaMood.HORNY and not intensity_is_nsfw and momentum < 40:
-            # Luna initiates when SHE's horny and user is NOT being explicit
-            if random.random() < 0.3:  # 30% chance when horny
+        if mood == LunaMood.PLAYFUL and not intensity_is_nsfw and momentum < 40:
+            if random.random() < 0.05:  # 5% chance when playful
                 luna_initiates = True
-                logger.info("JACKPOT: Luna initiates!")
+                logger.info("Luna initiates flirt!")
                 return AvailabilityResult(
                     score=availability,
                     should_deflect=False,
@@ -240,20 +394,12 @@ class LunaMoodEngine:
                     luna_initiates=True
                 )
 
-        # If user is trying to escalate to NSFW (only check on NSFW messages, not high momentum alone)
-        # High momentum doesn't mean user is currently trying to escalate
+        # If user is trying NSFW
         if intensity_is_nsfw:
             roll = random.random()
-
             if roll > availability:
-                # Deflect based on mood/context
-                deflect_type = self._get_deflect_type(
-                    mood, minutes_since_climax
-                )
-                logger.info(
-                    f"Deflecting: availability={availability:.2f}, "
-                    f"roll={roll:.2f}, type={deflect_type}"
-                )
+                deflect_type = self._get_deflect_type(mood, minutes_since_climax)
+                logger.info(f"Deflecting: avail={availability:.2f}, roll={roll:.2f}, type={deflect_type}")
                 return AvailabilityResult(
                     score=availability,
                     should_deflect=True,
@@ -261,7 +407,6 @@ class LunaMoodEngine:
                     luna_initiates=False
                 )
 
-        # Available
         return AvailabilityResult(
             score=availability,
             should_deflect=False,
@@ -269,20 +414,22 @@ class LunaMoodEngine:
             luna_initiates=False
         )
 
-    def _get_deflect_type(
-        self,
-        mood: LunaMood,
-        minutes_since_climax: float
-    ) -> str:
-        """Determine what type of deflection to use."""
+    def _get_deflect_type(self, mood: LunaMood, minutes_since_climax: float) -> str:
+        """Determine deflection type based on mood."""
         if minutes_since_climax < 15:
             return "too_soon"
         elif mood == LunaMood.TIRED:
             return "tired"
-        elif mood == LunaMood.ROMANTIC:
-            return "romantic"
+        elif mood == LunaMood.STRESSED:
+            return "stressed"
+        elif mood == LunaMood.ANNOYED:
+            return "annoyed"
+        elif mood == LunaMood.ANXIOUS:
+            return "anxious"
+        elif mood == LunaMood.VULNERABLE:
+            return "vulnerable"
         else:
-            return "playful"  # Default gentle deflection
+            return "playful"
 
 
 # Singleton

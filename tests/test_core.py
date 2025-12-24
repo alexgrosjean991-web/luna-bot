@@ -261,8 +261,10 @@ class TestLunaMoodEngine:
 
     def test_mood_values(self):
         from services.luna_mood import LunaMood
-        assert LunaMood.NORMAL.value == "normal"
-        assert LunaMood.HORNY.value == "horny"
+        assert LunaMood.NEUTRAL.value == "neutral"
+        assert LunaMood.PLAYFUL.value == "playful"
+        assert LunaMood.VULNERABLE.value == "vulnerable"
+        assert LunaMood.ANXIOUS.value == "anxious"
 
     def test_should_update_mood_none(self):
         from services.luna_mood import luna_mood_engine
@@ -279,7 +281,7 @@ class TestLunaMoodEngine:
     def test_availability_check(self):
         from services.luna_mood import luna_mood_engine, LunaMood
         result = luna_mood_engine.check_availability(
-            mood=LunaMood.NORMAL,
+            mood=LunaMood.NEUTRAL,
             minutes_since_climax=120,
             current_hour=22,
             momentum=30,

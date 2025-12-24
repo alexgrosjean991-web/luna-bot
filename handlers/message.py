@@ -48,7 +48,7 @@ from services.teasing import check_teasing_opportunity
 from services.momentum import momentum_engine, Intensity
 from services.llm_router import get_llm_config_v3, is_premium_session
 from services.prompt_selector import get_prompt_for_tier, get_prompt_for_tier_v7
-from services.luna_mood import luna_mood_engine, LunaMood
+from services.luna_mood import luna_mood_engine, LunaMood, MoodContext
 from prompts.deflect import get_deflect_prompt, get_luna_initiates_prompt
 from services.llm import call_with_graceful_fallback
 from services import conversion
@@ -255,14 +255,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # Check if mood should be updated (every 2-4 hours)
     if luna_mood_engine.should_update_mood(mood_updated_at):
-        new_luna_mood = luna_mood_engine.calculate_new_mood(
-            current_luna_mood, last_horny_at, hours_since_climax, current_hour
+        # Build mood context for V7 8-state system
+        mood_ctx = MoodContext(
+            current_hour=current_hour,
+            day_of_week=datetime.now(PARIS_TZ).weekday(),
+            hours_since_last_message=hours_since_last,
+            user_sentiment=None,  # TODO: detect from message
+            last_luna_state=luna_last_state,
+            trust_score=trust_score,
+            phase=phase
         )
+        new_luna_mood = luna_mood_engine.calculate_new_mood(mood_ctx, current_luna_mood)
         if new_luna_mood != current_luna_mood:
-            is_horny = new_luna_mood == LunaMood.HORNY
-            await update_luna_mood(user_id, new_luna_mood.value, is_horny)
+            await update_luna_mood(user_id, new_luna_mood.value)
             current_luna_mood = new_luna_mood
             logger.info(f"V8: Luna mood updated to {new_luna_mood.value}")
+
+    # Check for immediate mood trigger from user message
+    triggered_mood = luna_mood_engine.detect_mood_trigger(user_text, current_luna_mood)
+    if triggered_mood and triggered_mood != current_luna_mood:
+        await update_luna_mood(user_id, triggered_mood.value)
+        current_luna_mood = triggered_mood
+        logger.info(f"V8: Mood triggered by message -> {triggered_mood.value}")
 
     # Check availability for NSFW escalation (HOT or NSFW intensity)
     minutes_since_climax = hours_since_climax * 60
@@ -347,6 +361,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if trust_modifier:
         extra_instructions.append(trust_modifier)
         logger.info(f"V7 Trust: modifier applied (score={trust_score})")
+
+    # V8: Mood prompt (8 états émotionnels)
+    mood_prompt = luna_mood_engine.get_mood_prompt(current_luna_mood)
+    if mood_prompt:
+        extra_instructions.append(mood_prompt)
+        logger.info(f"V8 Mood: {current_luna_mood.value} prompt applied")
 
     # V9: Immersion context (temporalité, vie Luna, émotions, jalousie)
     immersion_ctx = build_immersion_context(
