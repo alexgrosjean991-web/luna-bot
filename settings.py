@@ -37,7 +37,7 @@ ANTHROPIC_API_VERSION = "2023-06-01"  # LOW FIX: API versioning
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 PREMIUM_MODEL = "anthracite-org/magnum-v4-72b"
-MAX_TOKENS_PREMIUM = 60   # Court et intense
+MAX_TOKENS_PREMIUM = 120  # Assez pour finir les phrases
 
 # Conversion
 PAYMENT_LINK = os.getenv("PAYMENT_LINK", "")

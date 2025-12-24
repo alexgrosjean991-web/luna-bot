@@ -109,7 +109,8 @@ class InsideJokesEngine:
         (r"\bchien\b|\btoutou\b", ["mon toutou", "petit chien"]),
         (r"j'ai renversé|j'ai cassé|je suis tombé", ["mon petit maladroit", "catastrophe ambulante"]),
         (r"j'adore (le |la |les )?(\w+)", ["mon gourmand de {match}"]),
-        (r"je joue (à |aux )?(\w+)", ["le gamer", "monsieur {match}"]),
+        # FIXED: exclude "jouis" and other NSFW words
+        (r"je joue (?!pt)(?:à |aux )?(\w+)", ["le gamer"]),
     ]
 
     def detect_opportunity(self, user_message: str, existing_jokes: list[InsideJoke]) -> Optional[JokeOpportunity]:
@@ -162,15 +163,22 @@ class InsideJokesEngine:
         Returns:
             Message de callback ou None
         """
-        # Probabilité augmente avec le temps
-        callback_probability = {1: 0.10, 2: 0.25, 3: 0.40, 4: 0.50, 5: 0.55}
-        prob = callback_probability.get(min(day_count, 5), 0.40)
+        # FIXED: Time-based cooldown - don't reference within 30 minutes
+        if joke.last_referenced:
+            minutes_since = (datetime.now() - joke.last_referenced).total_seconds() / 60
+            if minutes_since < 30:
+                logger.info(f"Inside joke '{joke.value}' skipped: referenced {minutes_since:.0f}min ago")
+                return None
 
-        # Réduire si trop utilisé récemment
+        # FIXED: Lower probability to avoid spam
+        callback_probability = {1: 0.05, 2: 0.10, 3: 0.15, 4: 0.20, 5: 0.20}
+        prob = callback_probability.get(min(day_count, 5), 0.15)
+
+        # Reduce further if overused
         if joke.times_referenced > 5:
-            prob *= 0.4
+            prob *= 0.2
         elif joke.times_referenced > 3:
-            prob *= 0.7
+            prob *= 0.5
 
         if random.random() > prob:
             return None
