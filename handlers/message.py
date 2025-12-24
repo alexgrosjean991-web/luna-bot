@@ -23,6 +23,7 @@ from services.db import (
     get_mood_state, update_luna_mood,
     get_momentum_state, update_momentum_state, start_climax_recovery,
     get_trust_state, update_trust_score, add_unlocked_secret,
+    get_user_intent, set_user_intent, get_aha_triggered, set_aha_triggered,
 )
 from services.psychology.variable_rewards import VariableRewardsEngine, RewardContext
 from services.psychology.inside_jokes import InsideJokesEngine, InsideJoke
@@ -56,6 +57,11 @@ from services.character_anchor import get_anchor_instruction, get_consistency_ch
 from prompts.deflect import get_deflect_prompt, get_luna_initiates_prompt
 from services.llm import call_with_graceful_fallback
 from services import conversion
+from services.aha_moment import should_trigger_aha, get_aha_instruction
+from services.intent_detection import (
+    detect_intent_from_messages, should_detect_intent,
+    get_intent_modifier, UserIntent
+)
 
 
 logger = logging.getLogger(__name__)
@@ -354,6 +360,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     extra_instructions = []
     if affection_instruction:
         extra_instructions.append(affection_instruction)
+
+    # ============== PHASE A: Intent Detection ==============
+    current_intent = await get_user_intent(user_id)
+    if should_detect_intent(msg_count, current_intent):
+        # Récupérer les premiers messages pour détecter l'intent
+        first_messages = [m["content"] for m in history[-5:] if m["role"] == "user"]
+        first_messages.append(user_text)
+        detected_intent = detect_intent_from_messages(first_messages)
+        await set_user_intent(user_id, detected_intent.value)
+        current_intent = detected_intent.value
+        logger.info(f"Phase A: Intent detected = {detected_intent.value}")
+
+    # Ajouter le modifier d'intent si détecté
+    if current_intent:
+        intent_enum = UserIntent(current_intent)
+        intent_mod = get_intent_modifier(intent_enum)
+        if intent_mod:
+            extra_instructions.append(intent_mod)
+
+    # ============== PHASE A: AHA Moment ==============
+    aha_triggered = await get_aha_triggered(user_id)
+    if should_trigger_aha(msg_count, aha_triggered):
+        aha_instruction = get_aha_instruction(memory or {}, user_text)
+        extra_instructions.append(aha_instruction)
+        await set_aha_triggered(user_id)
+        logger.info(f"Phase A: AHA moment triggered at msg {msg_count}")
 
     # V5: Memory callback instruction
     memory_instruction = memory_callbacks.get_memory_instruction(memory)

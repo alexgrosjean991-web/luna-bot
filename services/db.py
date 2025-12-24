@@ -816,3 +816,40 @@ async def get_unlocked_secrets(user_id: int) -> list:
         if isinstance(secrets, str):
             return json.loads(secrets)
         return secrets if secrets else []
+
+
+# ============== PHASE A: Intent + AHA ==============
+
+async def get_user_intent(user_id: int) -> str | None:
+    """Récupère l'intent de l'utilisateur."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT user_intent FROM users WHERE id = $1", user_id
+        )
+        return row["user_intent"] if row and row["user_intent"] else None
+
+
+async def set_user_intent(user_id: int, intent: str) -> None:
+    """Définit l'intent de l'utilisateur."""
+    async with get_pool().acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET user_intent = $1 WHERE id = $2",
+            intent, user_id
+        )
+
+
+async def get_aha_triggered(user_id: int) -> bool:
+    """Vérifie si le AHA moment a été déclenché."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT aha_triggered FROM users WHERE id = $1", user_id
+        )
+        return row["aha_triggered"] if row and row["aha_triggered"] else False
+
+
+async def set_aha_triggered(user_id: int) -> None:
+    """Marque le AHA moment comme déclenché."""
+    async with get_pool().acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET aha_triggered = TRUE WHERE id = $1", user_id
+        )
