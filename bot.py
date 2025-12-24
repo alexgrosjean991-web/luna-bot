@@ -573,7 +573,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # FIX V7: Détecter climax dans le message USER (pas juste Luna)
     # Check si: niveau actuel >= TENSION OU message détecté comme NSFW
     user_climax = False
-    if (transition_state["current_level"] >= 2 or detected_level >= ConversationLevel.NSFW) and detect_climax(user_text):
+    is_climax_msg = detect_climax(user_text)
+    climax_check = transition_state["current_level"] >= 2 or detected_level >= ConversationLevel.NSFW
+    logger.info(f"V7 Climax check: current_level={transition_state['current_level']}, detected={detected_level}, is_climax={is_climax_msg}, check={climax_check}")
+    if climax_check and is_climax_msg:
         user_climax = True
         target_level = ConversationLevel.SFW
         level_modifier = "AFTERCARE"
