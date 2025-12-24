@@ -321,7 +321,7 @@ async def generate_response(
             system_prompt=system_prompt,
             model=model,
             max_tokens=MAX_TOKENS_PREMIUM,
-            temperature=0.8
+            temperature=0.65  # Lower temp to reduce hallucinations
         )
 
     # ============== Anthropic (default) ==============
