@@ -671,7 +671,7 @@ async def get_momentum_state(user_id: int) -> dict:
     async with get_pool().acquire() as conn:
         row = await conn.fetchrow("""
             SELECT momentum, intimacy_history, messages_since_climax,
-                   current_tier, messages_this_session
+                   current_tier, messages_this_session, last_message_at
             FROM users WHERE id = $1
         """, user_id)
 
@@ -682,6 +682,7 @@ async def get_momentum_state(user_id: int) -> dict:
                 "messages_since_climax": 999,
                 "current_tier": 1,
                 "messages_this_session": 0,
+                "last_message_at": None,
             }
 
         return {
@@ -690,6 +691,7 @@ async def get_momentum_state(user_id: int) -> dict:
             "messages_since_climax": row["messages_since_climax"] or 999,
             "current_tier": row["current_tier"] or 1,
             "messages_this_session": row["messages_this_session"] or 0,
+            "last_message_at": row["last_message_at"],
         }
 
 

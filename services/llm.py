@@ -192,7 +192,8 @@ async def call_with_graceful_fallback(
     provider: str,
     model: str,
     tier: int,
-    max_tokens: int = MAX_TOKENS_PREMIUM
+    max_tokens: int = MAX_TOKENS_PREMIUM,
+    temperature: float = 0.65
 ) -> str:
     """
     Call LLM with graceful degradation fallback chain.
@@ -205,7 +206,7 @@ async def call_with_graceful_fallback(
     # Primary call
     try:
         if provider == "openrouter":
-            return await call_openrouter(messages, system_prompt, model, max_tokens)
+            return await call_openrouter(messages, system_prompt, model, max_tokens, temperature)
         else:
             return await call_anthropic_direct(messages, system_prompt, MAX_TOKENS)
     except Exception as e:

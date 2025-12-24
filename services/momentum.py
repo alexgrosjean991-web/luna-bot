@@ -5,16 +5,24 @@ Calculates conversation momentum (0-100) based on:
 - Message content intensity
 - Session duration
 - Historical engagement
+- Time-based decay
 
 Replaces the V7 TransitionManager with a smoother, momentum-based approach.
 """
 
 import re
 import logging
+import time
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+# Time-based decay constants
+DECAY_PER_MINUTE = 5.0       # Perd 5 points par minute d'inactivité
+POST_AFTERCARE_DECAY = 30.0  # Decay agressif après aftercare terminé
+SFW_ACCELERATED_DECAY = 10.0 # Decay accéléré sur messages SFW post-session
 
 
 class Intensity(str, Enum):
@@ -95,14 +103,28 @@ NEGATIVE_PATTERNS = [
     r'je (?:vais |)(?:pas bien|mal)',
 ]
 
-# Climax indicators
-CLIMAX_PATTERNS = [
+# Climax indicators (user messages)
+CLIMAX_USER_PATTERNS = [
     r'je (?:vais |)jouir',
     r'je jouis',
     r'j\'ai joui',
-    r'c\'était (?:bon|incroyable|wow|trop bon)',
-    r'ahh+',
-    r'💦.*💦',
+    r'(?:je|j) (?:viens|vais venir)',
+    r'c\'est trop bon',
+    r'orgasm',
+    r'(?:oui\s*){3,}',  # oui oui oui...
+    r'(?:ah|oh|mmh){3,}',  # ahhhh, ohhh, mmhhhh
+    r'💦',
+]
+
+# Climax indicators (Luna's responses)
+CLIMAX_LUNA_PATTERNS = [
+    r'je (?:vais |)jouir',
+    r'je jouis',
+    r'j\'(?:en |)peux plus',
+    r'c\'était (?:trop |tellement |)(?:bon|intense|incroyable)',
+    r'oh mon dieu',
+    r'wow\.\.\.',
+    r'(?:ah|oh|mmh){2,}',
 ]
 
 
@@ -126,6 +148,52 @@ class MomentumEngine:
     DECAY_FACTOR = 0.85          # Momentum decays if not maintained
     SESSION_BONUS = 3            # Bonus per message in session
     MAX_MOMENTUM = 100
+
+    def apply_time_decay(
+        self,
+        current_momentum: float,
+        last_message_at: datetime | None,
+        messages_since_climax: int = 999
+    ) -> float:
+        """
+        Apply time-based decay to momentum.
+
+        Args:
+            current_momentum: Current momentum value
+            last_message_at: Timestamp of last message
+            messages_since_climax: Messages since climax for post-aftercare decay
+
+        Returns:
+            Decayed momentum value
+        """
+        if not last_message_at or current_momentum <= 0:
+            return current_momentum
+
+        # Calculate elapsed time
+        now = datetime.now(timezone.utc)
+        if last_message_at.tzinfo is None:
+            last_message_at = last_message_at.replace(tzinfo=timezone.utc)
+
+        elapsed_seconds = (now - last_message_at).total_seconds()
+        elapsed_minutes = elapsed_seconds / 60
+
+        # Base decay: 5 points per minute
+        decay = elapsed_minutes * DECAY_PER_MINUTE
+
+        # Post-aftercare aggressive decay (aftercare = 5 msgs, so 6+ = post)
+        if 6 <= messages_since_climax <= 10:
+            decay += POST_AFTERCARE_DECAY
+            logger.info(f"Post-aftercare decay applied: +{POST_AFTERCARE_DECAY}")
+
+        new_momentum = max(0, current_momentum - decay)
+
+        if decay > 0:
+            logger.info(
+                f"Time decay: {current_momentum:.1f} → {new_momentum:.1f} "
+                f"(elapsed={elapsed_minutes:.1f}min, decay={decay:.1f})"
+            )
+
+        return new_momentum
 
     # Tier thresholds (base, adjusted by intimacy_history)
     BASE_TIER2_THRESHOLD = 35
@@ -310,10 +378,19 @@ class MomentumEngine:
             instruction=""
         )
 
-    def detect_climax(self, message: str) -> bool:
-        """Detect if message indicates climax."""
+    def detect_climax_user(self, message: str) -> bool:
+        """Detect if user message indicates climax."""
         msg_lower = message.lower()
-        return any(re.search(p, msg_lower) for p in CLIMAX_PATTERNS)
+        return any(re.search(p, msg_lower) for p in CLIMAX_USER_PATTERNS)
+
+    def detect_climax_luna(self, response: str) -> bool:
+        """Detect if Luna's response indicates climax happened."""
+        resp_lower = response.lower()
+        return any(re.search(p, resp_lower) for p in CLIMAX_LUNA_PATTERNS)
+
+    def detect_climax(self, message: str) -> bool:
+        """Detect if message indicates climax (user or Luna)."""
+        return self.detect_climax_user(message) or self.detect_climax_luna(message)
 
     def apply_climax_cooldown(self, current_momentum: float) -> float:
         """
@@ -338,6 +415,70 @@ class MomentumEngine:
         elif messages_since_climax <= 6:
             return "POST_INTIMATE"
         return None
+
+    def get_nsfw_state(
+        self,
+        momentum: float,
+        messages_since_climax: int = 999
+    ) -> str:
+        """
+        Get NSFW state for prompt selection.
+
+        States:
+        - 'sfw': momentum < 30 (use SFW prompt)
+        - 'tension': momentum 30-50 (flirt suggestif)
+        - 'buildup': momentum 51-70 (intensité croissante)
+        - 'climax': momentum 71+ (intense et émotionnel)
+        - 'aftercare': post-climax (5 messages)
+        - 'post_session': transition retour SFW (6-10 messages post-climax)
+
+        Returns:
+            State string for prompt selection
+        """
+        # Priority 1: Aftercare (5 messages post-climax)
+        if messages_since_climax <= 5:
+            logger.info(f"NSFW state: aftercare (messages_since_climax={messages_since_climax})")
+            return 'aftercare'
+
+        # Priority 2: Post-session transition (6-10 messages post-climax)
+        if 6 <= messages_since_climax <= 10:
+            logger.info(f"NSFW state: post_session (messages_since_climax={messages_since_climax})")
+            return 'post_session'
+
+        # Otherwise, based on momentum
+        if momentum >= 70:
+            state = 'climax'
+        elif momentum >= 50:
+            state = 'buildup'
+        elif momentum >= 30:
+            state = 'tension'
+        else:
+            state = 'sfw'
+
+        logger.info(f"NSFW state: {state} (momentum={momentum:.1f})")
+        return state
+
+    def get_sfw_decay_boost(
+        self,
+        intensity: Intensity,
+        messages_since_climax: int
+    ) -> float:
+        """
+        Get additional decay for SFW messages after NSFW session.
+
+        Returns extra decay to apply when user sends SFW messages
+        after an intimate session.
+        """
+        # Only apply boost if we're in post-session phase (6-15 msgs after climax)
+        if messages_since_climax < 6 or messages_since_climax > 15:
+            return 0.0
+
+        # SFW message = accelerated return to normal
+        if intensity == Intensity.SFW:
+            logger.info(f"SFW decay boost: +{SFW_ACCELERATED_DECAY}")
+            return SFW_ACCELERATED_DECAY
+
+        return 0.0
 
 
 # Singleton instance

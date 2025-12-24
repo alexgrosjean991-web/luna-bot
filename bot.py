@@ -121,7 +121,7 @@ from services.db import (
 # V3: Momentum-based routing
 from services.momentum import momentum_engine, Intensity
 from services.llm_router import get_llm_config_v3, get_llm_config, is_premium_session
-from services.prompt_selector import get_prompt_for_tier, get_tier_name
+from services.prompt_selector import get_prompt_for_tier, get_tier_name, get_prompt_for_tier_v7
 from services.llm import call_with_graceful_fallback
 from services import conversion
 from settings import PAYMENT_LINK
@@ -351,6 +351,10 @@ async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         tier_names = {1: "SFW (Haiku)", 2: "FLIRT (Magnum)", 3: "NSFW (Magnum)"}
         tier_str = tier_names.get(tier, f"Tier {tier}")
 
+        # V7: NSFW state
+        nsfw_state = momentum_engine.get_nsfw_state(momentum, msgs_since_climax)
+        nsfw_state_str = nsfw_state.upper() if tier >= 3 else "N/A"
+
         debug_msg = f"""🔍 **Debug User {target_telegram_id}**
 
 📊 **État Général**
@@ -359,9 +363,10 @@ async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 • Phase: {user.get('phase', 'discovery')}
 • Subscription: {user.get('subscription_status', 'trial')}
 
-🔥 **Momentum (V3)**
+🔥 **Momentum (V7)**
 • Momentum: {momentum:.1f}/100
 • Tier actuel: {tier_str}
+• État NSFW: {nsfw_state_str}
 • Intimacy history: {intimacy} sessions NSFW
 • Msgs depuis climax: {msgs_since_climax}
 • Msgs cette session: {user.get('messages_this_session', 0)}
@@ -634,6 +639,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     intimacy_history = momentum_state["intimacy_history"]
     messages_since_climax = momentum_state["messages_since_climax"]
     messages_this_session = momentum_state["messages_this_session"]
+    last_message_at = momentum_state["last_message_at"]
+
+    # V7: Apply time-based decay BEFORE calculating new momentum
+    decayed_momentum = momentum_engine.apply_time_decay(
+        current_momentum,
+        last_message_at,
+        messages_since_climax
+    )
+    if decayed_momentum != current_momentum:
+        current_momentum = decayed_momentum
 
     # Classify message intensity and calculate new momentum
     new_momentum, intensity, is_negative_emotion = momentum_engine.calculate_momentum(
@@ -642,6 +657,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         messages_this_session,
         day_count
     )
+
+    # V7: Apply SFW decay boost for faster return to normal after NSFW session
+    sfw_boost = momentum_engine.get_sfw_decay_boost(intensity, messages_since_climax)
+    if sfw_boost > 0:
+        new_momentum = max(0, new_momentum - sfw_boost)
 
     # Check for climax in user message
     user_climax = False
@@ -772,8 +792,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         ):
             show_conversion_after = True
 
-    # V3: Build system prompt based on tier
-    system_prompt = get_prompt_for_tier(final_tier, level_modifier)
+    # V7: Build system prompt based on tier with NSFW state support
+    # Get user context for NSFW prompts
+    user_name = memory.get("prenom", "lui") if memory else "lui"
+    inside_jokes_list = [j.value for j in existing_jokes] if existing_jokes else []
+    pet_names_list = memory.get("pet_names", []) if memory else []
+
+    # Get NSFW state for tier 3
+    nsfw_state = momentum_engine.get_nsfw_state(new_momentum, messages_since_climax)
+
+    # Use V7 prompt selector for tier 3, otherwise use regular
+    if final_tier >= 3:
+        system_prompt = get_prompt_for_tier_v7(
+            tier=final_tier,
+            nsfw_state=nsfw_state,
+            user_name=user_name,
+            inside_jokes=inside_jokes_list,
+            pet_names=pet_names_list,
+            modifier=level_modifier
+        )
+        logger.info(f"V7 NSFW: state={nsfw_state}, user={user_name}")
+    else:
+        system_prompt = get_prompt_for_tier(final_tier, level_modifier)
 
     # 13. Générer réponse avec graceful fallback
     try:

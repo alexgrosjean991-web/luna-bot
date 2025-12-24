@@ -1,12 +1,18 @@
 """
 Sélecteur de prompts basé sur le niveau/tier de conversation.
 V3: Support for tier-based selection (1=SFW, 2=FLIRT, 3=NSFW).
+V7: Support for NSFW states (tension, buildup, climax, aftercare).
 """
 
 from pathlib import Path
 import logging
+import sys
 
 logger = logging.getLogger(__name__)
+
+# Import des prompts NSFW V7
+sys.path.insert(0, str(Path(__file__).parent.parent / "prompts"))
+from nsfw_prompts import NSFW_PROMPTS, format_nsfw_prompt
 
 # Charger les prompts
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
@@ -106,3 +112,89 @@ def get_tier_name(tier: int) -> str:
     """Retourne le nom du tier pour le logging."""
     names = {1: "SFW", 2: "FLIRT", 3: "NSFW"}
     return names.get(tier, "UNKNOWN")
+
+
+# ============== V7: NSFW state-based prompt selection ==============
+
+def get_nsfw_prompt_v7(
+    nsfw_state: str,
+    user_name: str = "lui",
+    inside_jokes: list | None = None,
+    pet_names: list | None = None,
+    modifier: str | None = None
+) -> str:
+    """
+    Retourne le prompt NSFW V7 approprié pour l'état donné.
+
+    Args:
+        nsfw_state: 'tension', 'buildup', 'climax', 'aftercare'
+        user_name: Prénom de l'utilisateur
+        inside_jokes: Liste des inside jokes
+        pet_names: Liste des petits noms
+        modifier: Modificateur optionnel
+
+    Returns:
+        Le prompt système complet
+    """
+    # Get base prompt from NSFW_PROMPTS
+    base_prompt = format_nsfw_prompt(
+        state=nsfw_state,
+        user_name=user_name,
+        inside_jokes=inside_jokes,
+        pet_names=pet_names
+    )
+
+    # Add modifier if present
+    if modifier and modifier in MODIFIER_SECTIONS:
+        modifier_text = MODIFIER_SECTIONS[modifier]
+        base_prompt = f"{base_prompt}\n\n## INSTRUCTION SPÉCIALE\n{modifier_text}"
+        logger.info(f"NSFW prompt modifier applied: {modifier}")
+
+    logger.info(f"Using NSFW V7 prompt: state={nsfw_state}, user={user_name}")
+    return base_prompt
+
+
+def get_prompt_for_tier_v7(
+    tier: int,
+    nsfw_state: str = 'tension',
+    user_name: str = "lui",
+    inside_jokes: list | None = None,
+    pet_names: list | None = None,
+    modifier: str | None = None
+) -> str:
+    """
+    V7: Retourne le prompt approprié avec support NSFW états.
+
+    Args:
+        tier: 1 (SFW), 2 (FLIRT), 3 (NSFW)
+        nsfw_state: Pour tier 3: 'tension', 'buildup', 'climax', 'aftercare'
+        user_name: Prénom de l'utilisateur
+        inside_jokes: Liste des inside jokes
+        pet_names: Liste des petits noms
+        modifier: Modificateur optionnel
+
+    Returns:
+        Le prompt système complet
+    """
+    # Tier 1: SFW
+    if tier == 1:
+        base_prompt = PROMPT_SFW
+        if modifier and modifier in MODIFIER_SECTIONS:
+            base_prompt = f"{base_prompt}\n\n## INSTRUCTION SPÉCIALE\n{MODIFIER_SECTIONS[modifier]}"
+        return base_prompt
+
+    # Tier 2: FLIRT
+    if tier == 2:
+        base_prompt = PROMPT_FLIRT
+        if modifier and modifier in MODIFIER_SECTIONS:
+            base_prompt = f"{base_prompt}\n\n## INSTRUCTION SPÉCIALE\n{MODIFIER_SECTIONS[modifier]}"
+        return base_prompt
+
+    # Tier 3: NSFW avec états V7
+    return get_nsfw_prompt_v7(
+        nsfw_state=nsfw_state,
+        user_name=user_name,
+        inside_jokes=inside_jokes,
+        pet_names=pet_names,
+        modifier=modifier
+    )
