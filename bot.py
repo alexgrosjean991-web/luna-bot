@@ -208,6 +208,37 @@ def sanitize_input(text: str | None) -> str | None:
     return text.strip() or None
 
 
+def detect_engagement_signal(text: str) -> int:
+    """Détecte les signaux d'engagement positif pour le teasing stage.
+
+    Returns: 0 (neutre), 1 (engagement léger), 2 (engagement fort)
+    """
+    text_lower = text.lower()
+
+    # Signaux forts (+2): flirt explicite, compliments, enthousiasme
+    strong_signals = [
+        'j\'adore', 'trop belle', 'magnifique', 'canon', 'sublime',
+        't\'es incroyable', 'tu me plais', 'j\'ai envie', 'tu me manques',
+        'je kiffe', 'trop mignonne', 'j\'aime trop', 'tu me rends fou',
+        '😍', '🥰', '😘', '❤️', '💕', '🔥'
+    ]
+    for signal in strong_signals:
+        if signal in text_lower:
+            return 2
+
+    # Signaux légers (+1): intérêt, questions personnelles, positivité
+    light_signals = [
+        'tu fais quoi', 'raconte', 'et toi', 'parle moi', 'dis moi',
+        'c\'est cool', 'j\'aime bien', 'intéressant', 'haha', 'mdr',
+        '😊', '😏', '🙈', '💋'
+    ]
+    for signal in light_signals:
+        if signal in text_lower:
+            return 1
+
+    return 0
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handler /start."""
     user = await get_or_create_user(update.effective_user.id)
