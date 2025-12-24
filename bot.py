@@ -655,11 +655,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # ============== V6: LLM Router ==============
     teasing_stage = user_data.get("teasing_stage", 0)
     subscription_status = user_data.get("subscription_status", "trial")
-    # FIX V7: Passer le niveau ET le modifier pour router vers Magnum si NSFW/AFTERCARE
+    # FIX V7: Passer le niveau, le modifier ET detected_level pour router vers Magnum
     provider, model = get_llm_config(
         day_count, teasing_stage, subscription_status,
         current_level=int(target_level),
-        level_modifier=level_modifier
+        level_modifier=level_modifier,
+        detected_level=int(detected_level)
     )
 
     # V6: Track premium preview + check if conversion needed AFTER response

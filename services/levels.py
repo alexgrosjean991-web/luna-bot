@@ -47,7 +47,8 @@ TENSION_KEYWORDS = [
     'envie de toi', 'te veux', 'si tu étais là', 'imagine',
     'rêvé de toi', 'pense à toi', 'me manque', 'chaud', 'chaude',
     'excité', 'seul dans mon lit', 'nue', 'nu', 'déshabille',
-    'embrasse', 'caresse', 'touche', 'corps', 'peau'
+    'embrasse', 'caresse', 'touche', 'corps', 'peau',
+    'string', 'culotte', 'soutif', 'sous-vêtements', 'sexy'
 ]
 
 TENSION_PATTERNS = [

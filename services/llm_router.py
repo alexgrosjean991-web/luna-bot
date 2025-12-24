@@ -19,7 +19,8 @@ def get_llm_config(
     subscription_status: str,
     hour: int | None = None,
     current_level: int = 1,
-    level_modifier: str | None = None
+    level_modifier: str | None = None,
+    detected_level: int = 1
 ) -> tuple[str, str]:
     """
     Retourne (provider, model) selon contexte utilisateur.
@@ -29,14 +30,16 @@ def get_llm_config(
         teasing_stage: Niveau d'engagement (0-8)
         subscription_status: "trial" ou "active"
         hour: Heure actuelle (optionnel, pour tests)
-        current_level: Niveau de conversation (1=SFW, 2=TENSION, 3=NSFW)
+        current_level: Niveau de conversation TARGET (1=SFW, 2=TENSION, 3=NSFW)
         level_modifier: Modificateur (AFTERCARE, POST_NSFW, etc.)
+        detected_level: Niveau DÉTECTÉ dans le message user (peut être > current)
 
     Returns:
         Tuple (provider, model_name)
 
     Logic:
-        - NSFW niveau 3 → TOUJOURS Magnum (Haiku ne sait pas faire du NSFW)
+        - Message NSFW détecté → TOUJOURS Magnum (même si target est TENSION)
+        - NSFW niveau 3 → TOUJOURS Magnum
         - AFTERCARE/POST_NSFW → Magnum (historique NSFW, Haiku refuse)
         - Abonné actif → OpenRouter/Magnum
         - J5 20h+ avec teasing >= 5 → OpenRouter (aperçu)
@@ -46,7 +49,13 @@ def get_llm_config(
     if hour is None:
         hour = datetime.now().hour
 
-    # CRITIQUE: NSFW niveau 3 = toujours Magnum (Haiku refuse/échoue)
+    # CRITIQUE: Message NSFW détecté = Magnum (même si règles limitent à TENSION)
+    # Haiku refuse de répondre à du contenu NSFW même en mode BUILD_TENSION
+    if detected_level >= 3:
+        logger.info(f"Router: Magnum (NSFW detected in message)")
+        return ("openrouter", "anthracite-org/magnum-v4-72b")
+
+    # NSFW niveau target = toujours Magnum
     if current_level >= 3:
         logger.info(f"Router: Magnum (NSFW level {current_level})")
         return ("openrouter", "anthracite-org/magnum-v4-72b")
