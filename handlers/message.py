@@ -476,7 +476,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         prompt_parts = [system_prompt]
         if memory:
             prompt_parts.append(f"\n## CE QUE TU SAIS SUR LUI:\n{format_memory_for_prompt(memory)}")
-        prompt_parts.append(get_phase_instructions(phase, day_count, msg_count))
+        prompt_parts.append(get_phase_instructions(phase, msg_count))
         prompt_parts.append(f"\n## TON HUMEUR:\n{get_mood_instructions(mood)}")
         if extra_instructions:
             prompt_parts.append(f"\n## INSTRUCTIONS:\n" + "\n".join(extra_instructions))
