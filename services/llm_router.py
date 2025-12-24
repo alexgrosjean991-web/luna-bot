@@ -17,7 +17,8 @@ def get_llm_config(
     day_count: int,
     teasing_stage: int,
     subscription_status: str,
-    hour: int | None = None
+    hour: int | None = None,
+    current_level: int = 1
 ) -> tuple[str, str]:
     """
     Retourne (provider, model) selon contexte utilisateur.
@@ -27,18 +28,25 @@ def get_llm_config(
         teasing_stage: Niveau d'engagement (0-8)
         subscription_status: "trial" ou "active"
         hour: Heure actuelle (optionnel, pour tests)
+        current_level: Niveau de conversation (1=SFW, 2=TENSION, 3=NSFW)
 
     Returns:
         Tuple (provider, model_name)
 
     Logic:
-        - Abonné actif → OpenRouter/Euryale
+        - NSFW niveau 3 → TOUJOURS Magnum (Haiku ne sait pas faire du NSFW)
+        - Abonné actif → OpenRouter/Magnum
         - J5 20h+ avec teasing >= 5 → OpenRouter (aperçu)
         - J5 teasing >= 6 (user très engagé) → OpenRouter
         - Sinon → Anthropic/Haiku
     """
     if hour is None:
         hour = datetime.now().hour
+
+    # CRITIQUE: NSFW niveau 3 = toujours Magnum (Haiku refuse/échoue)
+    if current_level >= 3:
+        logger.info(f"Router: Magnum (NSFW level {current_level})")
+        return ("openrouter", "anthracite-org/magnum-v4-72b")
 
     # Abonnés = toujours premium
     if subscription_status == "active":
@@ -60,7 +68,7 @@ def get_llm_config(
         return ("openrouter", "anthracite-org/magnum-v4-72b")
 
     # Default: Haiku
-    logger.info(f"Router: Haiku (J{day_count}, teasing={teasing_stage})")
+    logger.info(f"Router: Haiku (J{day_count}, teasing={teasing_stage}, level={current_level})")
     return ("anthropic", "claude-3-5-haiku-20241022")
 
 

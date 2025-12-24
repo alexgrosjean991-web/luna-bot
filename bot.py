@@ -570,6 +570,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     logger.info(f"V7 Transition: detected={detected_level.name}, target={target_level.name}, reason={transition_reason}")
 
+    # FIX V7: Détecter climax dans le message USER (pas juste Luna)
+    user_climax = False
+    if transition_state["current_level"] >= 2 and detect_climax(user_text):
+        user_climax = True
+        target_level = ConversationLevel.SFW
+        level_modifier = "AFTERCARE"
+        await start_cooldown(user_id, TransitionManager.COOLDOWN_MESSAGES)
+        logger.info(f"V7: User climax detected, starting AFTERCARE cooldown")
+
+    # FIX V7: Désescalade naturelle NSFW → SFW/TENSION (sans climax)
+    if not user_climax and transition_state["current_level"] == 3 and target_level < 3:
+        if level_modifier is None:  # Pas déjà un modifier (AFTERCARE, etc.)
+            level_modifier = "POST_NSFW"
+            logger.info(f"V7: Natural de-escalation from NSFW, applying POST_NSFW")
+
     # 11. Progress emotional state if user responded
     if emotional_state == "opener":
         await set_emotional_state(user_id, "follow_up")
@@ -637,7 +652,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # ============== V6: LLM Router ==============
     teasing_stage = user_data.get("teasing_stage", 0)
     subscription_status = user_data.get("subscription_status", "trial")
-    provider, model = get_llm_config(day_count, teasing_stage, subscription_status)
+    # FIX V7: Passer le niveau pour router vers Magnum si NSFW
+    provider, model = get_llm_config(day_count, teasing_stage, subscription_status, current_level=int(target_level))
 
     # V6: Track premium preview + check if conversion needed AFTER response
     show_conversion_after = False
@@ -710,10 +726,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         cooldown_remaining=max(0, transition_state["cooldown_remaining"] - 1)
     )
 
-    # V7: Check for climax and start cooldown
-    if target_level == ConversationLevel.NSFW and detect_climax(response):
+    # V7: Check for climax in Luna's response (si pas déjà triggered par user)
+    if not user_climax and target_level == ConversationLevel.NSFW and detect_climax(response):
         await start_cooldown(user_id, TransitionManager.COOLDOWN_MESSAGES)
-        logger.info(f"V7: Climax detected, starting {TransitionManager.COOLDOWN_MESSAGES} messages cooldown")
+        logger.info(f"V7: Luna climax detected, starting {TransitionManager.COOLDOWN_MESSAGES} messages cooldown")
 
     # 16. Extraction mémoire périodique
     if msg_count % MEMORY_EXTRACTION_INTERVAL == 0:
