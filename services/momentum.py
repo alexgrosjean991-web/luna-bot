@@ -112,7 +112,8 @@ CLIMAX_USER_PATTERNS = [
     r'c\'est trop bon',
     r'orgasm',
     r'(?:oui\s*){3,}',  # oui oui oui...
-    r'(?:ah|oh|mmh){3,}',  # ahhhh, ohhh, mmhhhh
+    r'[ao]h{2,}',  # ahhh, ohhh (prolonged sounds, NOT "ahahaha" laughter)
+    r'm{2,}h',  # mmmh
     r'💦',
 ]
 
@@ -124,7 +125,8 @@ CLIMAX_LUNA_PATTERNS = [
     r'c\'était (?:trop |tellement |)(?:bon|intense|incroyable)',
     r'oh mon dieu',
     r'wow\.\.\.',
-    r'(?:ah|oh|mmh){2,}',
+    r'[ao]h{2,}',  # ahhh, ohhh (NOT "ahahaha" laughter)
+    r'm{2,}h',  # mmmh
 ]
 
 
