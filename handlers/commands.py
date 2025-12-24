@@ -73,9 +73,14 @@ async def health_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text(health_msg, parse_mode="Markdown")
 
 
+def is_admin(user_id: int) -> bool:
+    """Verifie si l'utilisateur est admin (ADMIN_TELEGRAM_ID doit etre configure)."""
+    return ADMIN_TELEGRAM_ID != 0 and user_id == ADMIN_TELEGRAM_ID
+
+
 async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handler /debug - affiche l'etat interne d'un user (admin only)."""
-    if update.effective_user.id != ADMIN_TELEGRAM_ID:
+    if not is_admin(update.effective_user.id):
         return
 
     # Parse target user (self or specified)
@@ -184,7 +189,7 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         /reset paywall      - Reset paywall
         /reset all          - Full reset (supprime user)
     """
-    if update.effective_user.id != ADMIN_TELEGRAM_ID:
+    if not is_admin(update.effective_user.id):
         return
 
     args = context.args
