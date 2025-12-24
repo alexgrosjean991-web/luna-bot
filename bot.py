@@ -72,14 +72,17 @@ from services.db import (
     get_or_create_user, get_user_memory, update_user_memory, increment_message_count,
     update_last_active, get_users_for_proactive, count_proactive_today, log_proactive,
     get_user_data, update_teasing_stage,
-    # CRITICAL FIX: États persistants
+    # États persistants
     get_emotional_state, set_emotional_state, set_last_message_time,
     # V5: Psychology data
     get_inside_jokes, update_inside_jokes, get_pending_events, update_pending_events,
     update_attachment_score, increment_session_count, increment_vulnerabilities,
     get_psychology_data, get_last_message_time,
     # V8: Luna mood system
-    get_mood_state, update_luna_mood
+    get_mood_state, update_luna_mood,
+    # V3: Momentum system
+    get_momentum_state, update_momentum_state, start_climax_recovery,
+    reset_momentum, reset_intimacy_history
 )
 
 # V5: Psychology modules
@@ -88,7 +91,7 @@ from services.psychology.inside_jokes import InsideJokesEngine, InsideJoke
 from services.psychology.intermittent import IntermittentEngine
 from services.psychology.memory_callbacks import MemoryCallbacksEngine, PendingEvent
 from services.psychology.attachment import AttachmentTracker
-from services.llm import generate_response
+# generate_response removed (dead code, V3 uses call_with_graceful_fallback)
 from services.memory import extract_memory
 from services.mood import get_current_mood, get_mood_instructions, get_mood_context
 from services.availability import send_with_natural_delay
@@ -107,18 +110,6 @@ from services.emotional_peaks import (
     should_trigger_emotional_peak, get_emotional_opener, EMOTIONAL_STATES
 )
 from services.story_arcs import get_story_context
-
-# V7: Transition system (legacy, kept for compatibility)
-from services.levels import (
-    ConversationLevel, EmotionalState, TransitionManager,
-    detect_level, detect_climax
-)
-from services.db import (
-    get_transition_state, update_transition_state, start_cooldown,
-    # V3: Momentum system
-    get_momentum_state, update_momentum_state, start_climax_recovery,
-    reset_momentum, reset_intimacy_history
-)
 
 # V3: Momentum-based routing
 from services.momentum import momentum_engine, Intensity
