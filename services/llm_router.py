@@ -84,11 +84,8 @@ def get_llm_config_v3(
         logger.info(f"Router: Magnum Tier {tier} ({modifier} modifier)")
         return (*MAGNUM_CONFIG, tier)
 
-    # Override 3: Active subscribers always get Magnum
-    if subscription_status == "active":
-        tier = max(base_tier, 2)
-        logger.info(f"Router: Magnum Tier {tier} (active subscriber)")
-        return (*MAGNUM_CONFIG, tier)
+    # Note: Active subscribers follow momentum-based routing like everyone else
+    # They transition to Haiku when momentum drops (cost optimization)
 
     # Tier-based routing
     if base_tier == 1:
