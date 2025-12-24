@@ -22,7 +22,7 @@ from services.db import (
     get_psychology_data, get_last_message_time,
     get_mood_state, update_luna_mood,
     get_momentum_state, update_momentum_state, start_climax_recovery,
-    get_trust_state, update_trust_score,
+    get_trust_state, update_trust_score, add_unlocked_secret,
 )
 from services.psychology.variable_rewards import VariableRewardsEngine, RewardContext
 from services.psychology.inside_jokes import InsideJokesEngine, InsideJoke
@@ -49,6 +49,7 @@ from services.momentum import momentum_engine, Intensity
 from services.llm_router import get_llm_config_v3, is_premium_session
 from services.prompt_selector import get_prompt_for_tier, get_prompt_for_tier_v7
 from services.luna_mood import luna_mood_engine, LunaMood, MoodContext
+from services.secrets import secrets_engine
 from prompts.deflect import get_deflect_prompt, get_luna_initiates_prompt
 from services.llm import call_with_graceful_fallback
 from services import conversion
@@ -391,6 +392,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 joke.last_referenced = datetime.now()
                 await update_inside_jokes(user_id, [j.to_dict() for j in existing_jokes])
                 break
+
+    # V7: Secrets revelation (layers system)
+    unlocked_secrets = trust_data.get("unlocked_secrets", [])
+    secret_to_reveal = secrets_engine.should_reveal_secret(
+        phase=phase,
+        trust_score=trust_score,
+        unlocked_secrets=unlocked_secrets,
+        context=user_text
+    )
+    if secret_to_reveal:
+        secret_instruction = secrets_engine.get_secret_instruction(secret_to_reveal)
+        extra_instructions.append(secret_instruction)
+        # Mark secret as unlocked
+        await add_unlocked_secret(user_id, secret_to_reveal.id)
+        logger.info(f"V7 Secret: revealing '{secret_to_reveal.id}' (layer {secret_to_reveal.layer})")
 
     # ============== V3: LLM Router (Tier-based) ==============
     teasing_stage = user_data.get("teasing_stage", 0)

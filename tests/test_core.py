@@ -444,3 +444,73 @@ class TestImmersion:
             user_message="salut"
         )
         assert ctx is not None
+
+
+# ============== V7 SECRETS TESTS ==============
+
+class TestSecrets:
+    """Tests pour le système de secrets V7."""
+
+    def test_secret_layers(self):
+        from services.secrets import SecretLayer
+        assert SecretLayer.SURFACE == 0
+        assert SecretLayer.INTEREST == 1
+        assert SecretLayer.CONNECTION == 2
+        assert SecretLayer.INTIMACY == 3
+        assert SecretLayer.DEPTH == 4
+        assert SecretLayer.ULTIMATE == 5
+
+    def test_secrets_by_layer(self):
+        from services.secrets import ALL_SECRETS, SecretLayer
+        # Verify we have secrets at each layer
+        layers = set(s.layer for s in ALL_SECRETS)
+        assert SecretLayer.SURFACE in layers
+        assert SecretLayer.INTEREST in layers
+        assert SecretLayer.CONNECTION in layers
+
+    def test_max_layer_calculation(self):
+        from services.secrets import secrets_engine, SecretLayer
+        # Discovery phase with low trust → Surface only
+        assert secrets_engine.get_max_layer("discovery", 20) == SecretLayer.SURFACE
+
+        # Interest phase with medium trust → Interest
+        assert secrets_engine.get_max_layer("interest", 40) == SecretLayer.INTEREST
+
+        # Intimacy phase with high trust → Intimacy
+        assert secrets_engine.get_max_layer("intimacy", 70) == SecretLayer.INTIMACY
+
+    def test_available_secrets(self):
+        from services.secrets import secrets_engine
+        # Get available secrets for discovery phase
+        available = secrets_engine.get_available_secrets(
+            phase="discovery",
+            trust_score=20,
+            unlocked_secrets=[]
+        )
+        # Should only have layer 0 secrets
+        assert all(s.layer == 0 for s in available)
+
+    def test_unlocked_secrets_excluded(self):
+        from services.secrets import secrets_engine
+        # First get available secrets
+        available = secrets_engine.get_available_secrets(
+            phase="interest",
+            trust_score=40,
+            unlocked_secrets=[]
+        )
+        first_secret_id = available[0].id
+
+        # Now get available with that secret unlocked
+        available2 = secrets_engine.get_available_secrets(
+            phase="interest",
+            trust_score=40,
+            unlocked_secrets=[first_secret_id]
+        )
+        assert all(s.id != first_secret_id for s in available2)
+
+    def test_secret_instruction_generation(self):
+        from services.secrets import secrets_engine, LAYER_0_SECRETS
+        secret = LAYER_0_SECRETS[0]
+        instruction = secrets_engine.get_secret_instruction(secret)
+        assert "RÉVÉLATION SPONTANÉE" in instruction
+        assert secret.content in instruction
