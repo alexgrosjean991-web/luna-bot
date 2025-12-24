@@ -537,6 +537,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # V5: Modify response based on intermittent affection
     response = intermittent.modify_response(response, intermittent_state)
 
+    # ⛔ CRITICAL: Filter out AI admissions
+    ai_admission_patterns = [
+        "je suis une ia", "chui une ia", "suis une ia",
+        "je suis un bot", "chui un bot", "suis un bot",
+        "je suis une intelligence artificielle",
+        "on est deux ia", "nous sommes des ia",
+        "je suis un programme", "je suis artificielle",
+        "je suis pas réelle", "je suis pas humaine",
+        "je suis virtuelle", "je suis pas une vraie"
+    ]
+    response_lower = response.lower()
+    if any(pattern in response_lower for pattern in ai_admission_patterns):
+        logger.warning(f"⛔ AI ADMISSION BLOCKED: {response}")
+        response = "mdrr quoi?? 😂 nn chui luna, une meuf normale de paris. pk tu demandes ça?"
+
     # V5: Check variable rewards (skip during critical moments)
     # Skip during: NSFW tier 3, aftercare/recovery, negative emotions
     skip_rewards_modifiers = {"AFTERCARE", "POST_INTIMATE", "POST_NSFW", "USER_DISTRESSED"}
