@@ -22,6 +22,7 @@ from services.db import (
     get_psychology_data, get_last_message_time,
     get_mood_state, update_luna_mood,
     get_momentum_state, update_momentum_state, start_climax_recovery,
+    get_trust_state, update_trust_score,
 )
 from services.psychology.variable_rewards import VariableRewardsEngine, RewardContext
 from services.psychology.inside_jokes import InsideJokesEngine, InsideJoke
@@ -35,7 +36,10 @@ from services.immersion import (
     LunaEmotion, get_emotion_for_session
 )
 from services.availability import send_with_natural_delay
-from services.relationship import get_relationship_phase, get_phase_instructions
+from services.relationship import get_relationship_phase, get_phase_instructions, get_phase_info
+from services.trust_system import (
+    detect_trust_action, apply_trust_action, get_trust_modifier, get_trust_state as compute_trust_state
+)
 from services.subscription import (
     is_trial_expired, get_paywall_message, get_post_paywall_response,
     mark_paywall_sent, has_paywall_been_sent,
@@ -112,8 +116,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_data = await get_user_data(user_id)
     first_message_at = user_data.get("first_message_at")
 
-    # 6. Calculer phase et jour
-    phase, day_count = get_relationship_phase(first_message_at)
+    # 6. Calculer phase par msg_count (V7)
+    phase, _ = get_relationship_phase(msg_count)
+    phase_info = get_phase_info(msg_count)
+
+    # 6b. Calculer day_count pour compatibilité (momentum, teasing)
+    if first_message_at:
+        if first_message_at.tzinfo is None:
+            first_message_at = first_message_at.replace(tzinfo=PARIS_TZ)
+        day_count = (datetime.now(PARIS_TZ) - first_message_at).days + 1
+    else:
+        day_count = 1
+
+    # 6c. Recuperer trust state (V7)
+    trust_data = await get_trust_state(user_id)
+    trust_score = trust_data.get("trust_score", 50)
+    luna_last_state = trust_data.get("luna_last_state", "neutral")
 
     # 7. Verifier subscription (paywall apres 5 jours, sauf si abonne)
     subscription_status = user_data.get("subscription_status", "trial")
@@ -148,7 +166,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     existing_jokes = [InsideJoke.from_dict(j) for j in psych_data.get("inside_jokes", [])]
     pending_events = [PendingEvent.from_dict(e) for e in psych_data.get("pending_events", [])]
 
-    logger.info(f"User {user_id}: Day={day_count}, Mood={mood}, Jokes={len(existing_jokes)}")
+    logger.info(f"User {user_id}: Phase={phase}({msg_count}msgs), Trust={trust_score}, Mood={mood}")
 
     # ============== V3: MOMENTUM SYSTEM ==============
     # Get current momentum state
@@ -323,6 +341,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     memory_instruction = memory_callbacks.get_memory_instruction(memory)
     if memory_instruction:
         extra_instructions.append(memory_instruction)
+
+    # V7: Trust modifier
+    trust_modifier = get_trust_modifier(trust_score)
+    if trust_modifier:
+        extra_instructions.append(trust_modifier)
+        logger.info(f"V7 Trust: modifier applied (score={trust_score})")
 
     # V9: Immersion context (temporalité, vie Luna, émotions, jalousie)
     immersion_ctx = build_immersion_context(
@@ -541,6 +565,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if new_teasing_stage > teasing_stage:
             await update_teasing_stage(user_id, new_teasing_stage)
             logger.info(f"Teasing stage updated: {teasing_stage} -> {new_teasing_stage}")
+
+    # V7: Detect and apply trust actions
+    trust_action = detect_trust_action(
+        user_message=user_text,
+        luna_last_state=luna_last_state,
+        memory=memory,
+        hours_since_last=hours_since_last
+    )
+    if trust_action:
+        new_trust = apply_trust_action(trust_score, trust_action)
+        # Determine Luna's current state based on mood/context
+        current_luna_state = mood if mood in ("vulnerable", "anxious", "stressed") else "neutral"
+        await update_trust_score(user_id, new_trust, current_luna_state)
+        logger.info(f"V7 Trust: {trust_action.action_id} applied, score={trust_score}→{new_trust}")
 
     # 17. Envoyer avec delai naturel (+ intermittent delay modifier)
     delay_modifier = intermittent.get_delay_modifier(intermittent_state)

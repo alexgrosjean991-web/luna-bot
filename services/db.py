@@ -724,3 +724,100 @@ async def update_luna_mood(
                     mood_updated_at = NOW()
                 WHERE id = $1
             """, user_id, mood)
+
+
+# ============== TRUST SYSTEM (V7) ==============
+
+async def get_trust_state(user_id: int) -> dict:
+    """
+    Récupère l'état de confiance d'un utilisateur.
+
+    Returns:
+        dict avec trust_score, luna_last_state, unlocked_secrets
+    """
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT
+                COALESCE(trust_score, 50) as trust_score,
+                COALESCE(luna_last_state, 'neutral') as luna_last_state,
+                COALESCE(unlocked_secrets, '[]'::jsonb) as unlocked_secrets,
+                last_trust_update
+            FROM users WHERE id = $1
+        """, user_id)
+
+        if not row:
+            return {
+                "trust_score": 50,
+                "luna_last_state": "neutral",
+                "unlocked_secrets": [],
+                "last_trust_update": None
+            }
+
+        secrets = row["unlocked_secrets"]
+        if isinstance(secrets, str):
+            secrets = json.loads(secrets)
+
+        return {
+            "trust_score": row["trust_score"],
+            "luna_last_state": row["luna_last_state"],
+            "unlocked_secrets": secrets if secrets else [],
+            "last_trust_update": row["last_trust_update"]
+        }
+
+
+async def update_trust_score(user_id: int, new_score: int, luna_state: str = None) -> None:
+    """
+    Met à jour le score de confiance.
+
+    Args:
+        user_id: ID utilisateur
+        new_score: Nouveau score (0-100)
+        luna_state: État émotionnel de Luna (optionnel)
+    """
+    new_score = max(0, min(100, new_score))  # Clamp 0-100
+
+    async with get_pool().acquire() as conn:
+        if luna_state:
+            await conn.execute("""
+                UPDATE users SET
+                    trust_score = $2,
+                    luna_last_state = $3,
+                    last_trust_update = NOW()
+                WHERE id = $1
+            """, user_id, new_score, luna_state)
+        else:
+            await conn.execute("""
+                UPDATE users SET
+                    trust_score = $2,
+                    last_trust_update = NOW()
+                WHERE id = $1
+            """, user_id, new_score)
+
+
+async def add_unlocked_secret(user_id: int, secret_id: str) -> None:
+    """Ajoute un secret débloqué pour l'utilisateur."""
+    async with get_pool().acquire() as conn:
+        # Ajoute le secret s'il n'existe pas déjà
+        await conn.execute("""
+            UPDATE users SET
+                unlocked_secrets = COALESCE(unlocked_secrets, '[]'::jsonb) || $2::jsonb
+            WHERE id = $1
+            AND NOT (COALESCE(unlocked_secrets, '[]'::jsonb) @> $2::jsonb)
+        """, user_id, json.dumps([secret_id]))
+
+
+async def get_unlocked_secrets(user_id: int) -> list:
+    """Récupère la liste des secrets débloqués."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT COALESCE(unlocked_secrets, '[]'::jsonb) as secrets
+            FROM users WHERE id = $1
+        """, user_id)
+
+        if not row:
+            return []
+
+        secrets = row["secrets"]
+        if isinstance(secrets, str):
+            return json.loads(secrets)
+        return secrets if secrets else []
