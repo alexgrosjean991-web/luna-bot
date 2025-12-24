@@ -161,22 +161,10 @@ async def init_db() -> None:
             conversion_shown_at TIMESTAMP WITH TIME ZONE DEFAULT NULL
         """)
 
-        # V7: Colonnes pour système de transitions
-        await conn.execute("""
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS
-            current_level INTEGER DEFAULT 1
-        """)
-        await conn.execute("""
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS
-            cooldown_remaining INTEGER DEFAULT 0
-        """)
+        # Colonnes pour session tracking (utilisees par V3 momentum)
         await conn.execute("""
             ALTER TABLE users ADD COLUMN IF NOT EXISTS
             messages_this_session INTEGER DEFAULT 0
-        """)
-        await conn.execute("""
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS
-            messages_since_level_change INTEGER DEFAULT 0
         """)
         await conn.execute("""
             ALTER TABLE users ADD COLUMN IF NOT EXISTS
@@ -569,92 +557,6 @@ async def get_psychology_data(user_id: int) -> dict:
             "first_message_at": row["first_message_at"],
             "last_message_at": row["last_message_at"],
         }
-
-
-# ============== V7: Transition system functions ==============
-
-async def get_transition_state(user_id: int) -> dict:
-    """Récupère l'état de transition pour un user."""
-    async with get_pool().acquire() as conn:
-        row = await conn.fetchrow("""
-            SELECT current_level, cooldown_remaining, messages_this_session,
-                   messages_since_level_change, last_climax_at
-            FROM users WHERE id = $1
-        """, user_id)
-
-        if not row:
-            return {
-                "current_level": 1,
-                "cooldown_remaining": 0,
-                "messages_this_session": 0,
-                "messages_since_level_change": 0,
-                "last_climax_at": None,
-            }
-
-        return {
-            "current_level": row["current_level"] or 1,
-            "cooldown_remaining": row["cooldown_remaining"] or 0,
-            "messages_this_session": row["messages_this_session"] or 0,
-            "messages_since_level_change": row["messages_since_level_change"] or 0,
-            "last_climax_at": row["last_climax_at"],
-        }
-
-
-async def update_transition_state(
-    user_id: int,
-    current_level: int,
-    cooldown_remaining: int,
-    messages_this_session: int,
-    messages_since_level_change: int,
-    last_climax_at=None
-) -> None:
-    """Met à jour l'état de transition."""
-    async with get_pool().acquire() as conn:
-        if last_climax_at:
-            await conn.execute("""
-                UPDATE users SET
-                    current_level = $2,
-                    cooldown_remaining = $3,
-                    messages_this_session = $4,
-                    messages_since_level_change = $5,
-                    last_climax_at = $6
-                WHERE id = $1
-            """, user_id, current_level, cooldown_remaining,
-                messages_this_session, messages_since_level_change, last_climax_at)
-        else:
-            await conn.execute("""
-                UPDATE users SET
-                    current_level = $2,
-                    cooldown_remaining = $3,
-                    messages_this_session = $4,
-                    messages_since_level_change = $5
-                WHERE id = $1
-            """, user_id, current_level, cooldown_remaining,
-                messages_this_session, messages_since_level_change)
-
-
-async def decrement_cooldown(user_id: int) -> int:
-    """Décrémente le cooldown et retourne la nouvelle valeur."""
-    async with get_pool().acquire() as conn:
-        row = await conn.fetchrow("""
-            UPDATE users
-            SET cooldown_remaining = GREATEST(cooldown_remaining - 1, 0)
-            WHERE id = $1
-            RETURNING cooldown_remaining
-        """, user_id)
-        return row["cooldown_remaining"] if row else 0
-
-
-async def start_cooldown(user_id: int, cooldown_messages: int = 5) -> None:
-    """Démarre le cooldown après un climax."""
-    async with get_pool().acquire() as conn:
-        await conn.execute("""
-            UPDATE users SET
-                cooldown_remaining = $2,
-                last_climax_at = NOW(),
-                current_level = 1
-            WHERE id = $1
-        """, user_id, cooldown_messages)
 
 
 # ============== V3: Momentum system functions ==============

@@ -297,14 +297,6 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     await conn.execute("DELETE FROM users WHERE id = $1", user["id"])
             await update.message.reply_text(f"User {target_telegram_id} supprime (full reset)")
 
-        elif action == "cooldown":
-            async with pool.acquire() as conn:
-                await conn.execute(
-                    "UPDATE users SET cooldown_remaining = 0 WHERE telegram_id = $1",
-                    target_telegram_id
-                )
-            await update.message.reply_text(f"Cooldown reset pour {target_telegram_id}")
-
         elif action == "session":
             async with pool.acquire() as conn:
                 await conn.execute(
