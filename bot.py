@@ -700,10 +700,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if sfw_boost > 0:
         new_momentum = max(0, new_momentum - sfw_boost)
 
-    # Check for climax in user message
+    # Check for climax in user message (use detect_climax_user, NOT detect_climax)
+    # detect_climax also checks Luna patterns which are too loose for user messages
     user_climax = False
-    is_climax_msg = momentum_engine.detect_climax(user_text)
-    if (intensity == Intensity.NSFW or current_momentum > 50) and is_climax_msg:
+    is_climax_msg = momentum_engine.detect_climax_user(user_text)
+    if intensity == Intensity.NSFW and is_climax_msg:
         user_climax = True
         new_momentum = momentum_engine.apply_climax_cooldown(new_momentum)
         logger.info(f"V3: User climax detected, momentum reduced to {new_momentum:.1f}")
