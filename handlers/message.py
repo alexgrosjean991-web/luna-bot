@@ -27,6 +27,7 @@ from services.db import (
     get_gates_triggered, add_gate_triggered,
     get_investment_data, update_investment, update_user_segment,
     reset_winback_state,
+    get_photo_state, log_photo_sent, get_sent_photo_paths,
 )
 from services.psychology.variable_rewards import VariableRewardsEngine, RewardContext
 from services.psychology.inside_jokes import InsideJokesEngine, InsideJoke
@@ -71,6 +72,11 @@ from services.paywall_dynamic import (
     get_paywall_urgency
 )
 from services.investment_tracker import investment_tracker
+from services.photos import (
+    detect_photo_request, get_photo_for_context, get_caption,
+    get_context_from_state, should_send_spontaneous_photo,
+    get_spontaneous_photo_type, get_denial_message, can_access_photo_type
+)
 
 
 logger = logging.getLogger(__name__)
@@ -667,6 +673,69 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.warning(f"⛔ AI ADMISSION BLOCKED: {response}")
         response = "mdrr quoi?? 😂 nn chui luna, une meuf normale de paris. pk tu demandes ça?"
 
+    # ============== PHOTO SYSTEM ==============
+    photo_to_send = None
+    photo_caption = None
+
+    # 1. Check if user is requesting a photo
+    requested_photo_type = detect_photo_request(user_text)
+    if requested_photo_type:
+        # Get photo state
+        photo_state = await get_photo_state(user_id)
+        sent_photos = [p.get("path", "") for p in photo_state.get("photos_sent", [])]
+
+        # Check access
+        if can_access_photo_type(requested_photo_type, phase, final_tier, subscription_status, trust_score):
+            result = get_photo_for_context(
+                phase=phase,
+                tier=final_tier,
+                subscription_status=subscription_status,
+                trust_score=trust_score,
+                requested_type=requested_photo_type,
+                sent_photos=sent_photos
+            )
+            if result:
+                photo_path, photo_type = result
+                photo_to_send = photo_path
+                photo_context = get_context_from_state(current_hour, final_tier, current_luna_mood.value)
+                photo_caption = get_caption(photo_type, photo_context)
+                logger.info(f"Photo request granted: {photo_type.value}")
+        else:
+            # Access denied - add denial message to response
+            denial = get_denial_message(requested_photo_type, phase, final_tier, subscription_status)
+            response = denial
+            logger.info(f"Photo request denied: {requested_photo_type.value}")
+
+    # 2. Check for spontaneous photo (if no photo already being sent)
+    elif not photo_to_send:
+        photo_state = await get_photo_state(user_id)
+        last_photo_at = photo_state.get("last_photo_at")
+
+        if should_send_spontaneous_photo(
+            msg_count=msg_count,
+            messages_this_session=messages_this_session,
+            tier=final_tier,
+            luna_mood=current_luna_mood.value,
+            last_photo_at=last_photo_at
+        ):
+            spontaneous_type = get_spontaneous_photo_type(phase, final_tier, subscription_status, trust_score)
+            if spontaneous_type:
+                sent_photos = [p.get("path", "") for p in photo_state.get("photos_sent", [])]
+                result = get_photo_for_context(
+                    phase=phase,
+                    tier=final_tier,
+                    subscription_status=subscription_status,
+                    trust_score=trust_score,
+                    requested_type=spontaneous_type,
+                    sent_photos=sent_photos
+                )
+                if result:
+                    photo_path, photo_type = result
+                    photo_to_send = photo_path
+                    photo_context = get_context_from_state(current_hour, final_tier, current_luna_mood.value)
+                    photo_caption = get_caption(photo_type, photo_context)
+                    logger.info(f"Spontaneous photo: {photo_type.value}")
+
     # V5: Check variable rewards (skip during critical moments)
     # Skip during: NSFW tier 3, aftercare/recovery, negative emotions
     skip_rewards_modifiers = {"AFTERCARE", "POST_INTIMATE", "POST_NSFW", "USER_DISTRESSED"}
@@ -783,6 +852,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # 17. Envoyer avec delai naturel (+ intermittent delay modifier)
     delay_modifier = intermittent.get_delay_modifier(intermittent_state)
     await send_with_natural_delay(update, response, mood, delay_modifier)
+
+    # 18. Envoyer photo si applicable
+    if photo_to_send:
+        try:
+            import asyncio
+            await asyncio.sleep(random.uniform(1.5, 3.0))  # Petit délai naturel
+            await context.bot.send_chat_action(
+                chat_id=update.effective_chat.id,
+                action="upload_photo"
+            )
+            await asyncio.sleep(random.uniform(0.5, 1.5))
+
+            with open(photo_to_send, "rb") as photo_file:
+                await context.bot.send_photo(
+                    chat_id=update.effective_chat.id,
+                    photo=photo_file,
+                    caption=photo_caption if photo_caption else None
+                )
+
+            # Log photo sent
+            await log_photo_sent(user_id, str(photo_to_send), photo_type.value)
+            logger.info(f"Photo sent to user {user_id}: {photo_type.value}")
+        except Exception as e:
+            logger.error(f"Failed to send photo: {e}")
 
     # V6: Show conversion flow AFTER response (not instead of)
     if show_conversion_after:

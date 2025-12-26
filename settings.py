@@ -60,3 +60,6 @@ JOB_CHURN_INTERVAL = 3600       # 1 hour
 JOB_PROACTIVE_FIRST = 60        # First run delay
 JOB_WINBACK_FIRST = 300         # First run delay
 JOB_CHURN_FIRST = 600           # First run delay
+
+# Photos
+PHOTOS_PATH = os.getenv("PHOTOS_PATH", "/app/content/photos")

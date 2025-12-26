@@ -341,6 +341,20 @@ async def init_db() -> None:
             avg_response_time FLOAT DEFAULT NULL
         """)
 
+        # Photos system
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            photos_sent JSONB DEFAULT '[]'::jsonb
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            last_photo_at TIMESTAMP WITH TIME ZONE DEFAULT NULL
+        """)
+        await conn.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS
+            photos_count INTEGER DEFAULT 0
+        """)
+
     logger.info("DB connectée")
 
 
@@ -1213,3 +1227,63 @@ async def get_users_at_churn_risk() -> list[dict]:
             AND subscription_status != 'active'
         """)
         return [dict(row) for row in rows]
+
+
+# ============== PHOTOS SYSTEM ==============
+
+async def get_photo_state(user_id: int) -> dict:
+    """Récupère l'état des photos pour un utilisateur."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT
+                COALESCE(photos_sent, '[]'::jsonb) as photos_sent,
+                last_photo_at,
+                COALESCE(photos_count, 0) as photos_count
+            FROM users WHERE id = $1
+        """, user_id)
+
+        if not row:
+            return {
+                "photos_sent": [],
+                "last_photo_at": None,
+                "photos_count": 0
+            }
+
+        return {
+            "photos_sent": safe_json_loads(row["photos_sent"], [], "photos_sent"),
+            "last_photo_at": row["last_photo_at"],
+            "photos_count": row["photos_count"]
+        }
+
+
+async def log_photo_sent(user_id: int, photo_path: str, photo_type: str) -> None:
+    """Enregistre l'envoi d'une photo."""
+    async with get_pool().acquire() as conn:
+        # Ajouter à la liste (garder les 50 dernières)
+        await conn.execute("""
+            UPDATE users SET
+                photos_sent = (
+                    SELECT jsonb_agg(elem)
+                    FROM (
+                        SELECT elem
+                        FROM jsonb_array_elements(
+                            COALESCE(photos_sent, '[]'::jsonb) || $2::jsonb
+                        ) elem
+                        ORDER BY elem->>'sent_at' DESC
+                        LIMIT 50
+                    ) sub
+                ),
+                last_photo_at = NOW(),
+                photos_count = photos_count + 1
+            WHERE id = $1
+        """, user_id, json.dumps([{
+            "path": photo_path,
+            "type": photo_type,
+            "sent_at": datetime.now(PARIS_TZ).isoformat()
+        }]))
+
+
+async def get_sent_photo_paths(user_id: int) -> list[str]:
+    """Récupère la liste des chemins de photos déjà envoyées."""
+    state = await get_photo_state(user_id)
+    return [p.get("path", "") for p in state.get("photos_sent", [])]
