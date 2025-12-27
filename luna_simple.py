@@ -115,6 +115,26 @@ CLIMAX_PATTERNS = [
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+
+# =============================================================================
+# ASYNC HELPERS
+# =============================================================================
+
+def create_safe_task(coro, task_name: str):
+    """
+    Crée une tâche async avec error handling.
+    Les erreurs sont loggées mais ne crashent pas le bot.
+    """
+    async def wrapped():
+        try:
+            return await coro
+        except Exception as e:
+            logger.error(f"[{task_name}] Background task failed: {e}", exc_info=True)
+            return None
+
+    return asyncio.create_task(wrapped())
+
+
 # =============================================================================
 # DATABASE
 # =============================================================================
@@ -539,7 +559,7 @@ async def process_buffered_messages(telegram_id: int, update: Update, context: C
     history = await get_history(user_id, limit=10)
 
     # Extract facts using memory system (async, in background)
-    asyncio.create_task(extract_user_facts(user_id, combined_text, history))
+    create_safe_task(extract_user_facts(user_id, combined_text, history), "extract_user_facts")
 
     # =========================================================================
     # PHASE SYSTEM (replaces old day-based logic)
@@ -669,7 +689,7 @@ async def process_buffered_messages(telegram_id: int, update: Update, context: C
     await save_message(user_id, "assistant", response)
 
     # Extract what Luna said (async, in background)
-    asyncio.create_task(extract_luna_said(user_id, response, combined_text))
+    create_safe_task(extract_luna_said(user_id, response, combined_text), "extract_luna_said")
 
     # Natural delay (shorter since we already waited BUFFER_DELAY)
     delay = random.uniform(0.3, 1.0)
