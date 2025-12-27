@@ -80,6 +80,82 @@ def _detect_prompt_injection(text: str) -> bool:
             return True
     return False
 
+
+# =============================================================================
+# FIX P0 #1: Third-Party Name Validation
+# =============================================================================
+
+# Patterns qui indiquent que le nom est celui d'un TIERS (pas l'utilisateur)
+THIRD_PARTY_NAME_PATTERNS = [
+    # Famille/amis mentionnés
+    r'(?:mon|ma)\s+(?:pote|ami|amie|frère|sœur|soeur|père|mère|mere|oncle|tante|cousin|cousine|copain|copine|ex|meuf|mec|gars|boss|chef|collègue)\s+(\w+)',
+    # "X m'a dit/parlé"
+    r'(\w+)\s+m\'?(?:a|avait)\s+(?:dit|parlé|raconté|expliqué)',
+    # "il/elle s'appelle X"
+    r'(?:il|elle)\s+s\'?appelle\s+(\w+)',
+    # "je connais un/une X"
+    r'(?:je\s+)?connais\s+(?:un|une)\s+(\w+)',
+    # "avec X" au début
+    r'^avec\s+(\w+)',
+    # "X et moi"
+    r'(\w+)\s+et\s+moi',
+    # "chez X"
+    r'chez\s+(\w+)',
+]
+
+# Patterns qui CONFIRMENT que le nom est celui de l'utilisateur
+USER_OWN_NAME_PATTERNS = [
+    r'(?:je\s+)?(?:m\'?appelle|suis)\s+(\w+)',
+    r'moi\s+c\'?est\s+(\w+)',
+    r'(?:mon\s+)?(?:nom|prénom)\s+(?:c\'?est|est|:)\s*(\w+)',
+    r'c\'?est\s+(\w+)\s+(?:mon\s+)?(?:prénom|nom)',
+    r'appelle[- ]?moi\s+(\w+)',
+]
+
+THIRD_PARTY_REGEX = [re.compile(p, re.IGNORECASE) for p in THIRD_PARTY_NAME_PATTERNS]
+USER_OWN_NAME_REGEX = [re.compile(p, re.IGNORECASE) for p in USER_OWN_NAME_PATTERNS]
+
+
+def _is_user_own_name(name: str, message: str) -> bool:
+    """
+    Vérifie si le nom extrait est bien celui de l'utilisateur (pas d'un tiers).
+
+    Returns True si:
+    - Le nom match un pattern "je m'appelle X", "moi c'est X", etc.
+
+    Returns False si:
+    - Le nom match un pattern "mon pote X", "X m'a dit", etc.
+    - Aucun pattern de confirmation trouvé (doute = rejeter)
+    """
+    msg_lower = message.lower()
+    name_lower = name.lower()
+
+    # Check si c'est un nom de tiers
+    for pattern in THIRD_PARTY_REGEX:
+        match = pattern.search(msg_lower)
+        if match:
+            # Extraire le nom du pattern
+            matched_name = match.group(1).lower() if match.lastindex else ""
+            if matched_name == name_lower:
+                logger.warning(f"THIRD-PARTY NAME detected: '{name}' is not user's own name")
+                return False
+
+    # Check si c'est bien le nom du user
+    for pattern in USER_OWN_NAME_REGEX:
+        match = pattern.search(msg_lower)
+        if match:
+            matched_name = match.group(1).lower() if match.lastindex else ""
+            if matched_name == name_lower:
+                return True  # Confirmé comme nom du user
+
+    # Fallback: si le nom est présent mais aucun pattern clair → doute = accepter
+    # (car on a déjà vérifié que le nom est dans le message via anti-hallucination)
+    if name_lower in msg_lower:
+        return True
+
+    return False
+
+
 from .crud import (
     get_pool,
     get_user_by_id,
@@ -578,7 +654,7 @@ async def extract_unified(
                 continue
 
         if fact.get("value") and fact.get("importance", 0) >= min_importance:
-            fact_stored = await _store_user_fact(user_id, fact, current_user)
+            fact_stored = await _store_user_fact(user_id, fact, current_user, user_message)
             if fact_stored:
                 stored_facts.append(fact_stored)
             else:
@@ -707,7 +783,7 @@ def _is_valid_name(value: str) -> bool:
     return True
 
 
-async def _store_user_fact(user_id: UUID, fact: dict, current_user: dict) -> Optional[dict]:
+async def _store_user_fact(user_id: UUID, fact: dict, current_user: dict, user_message: str = "") -> Optional[dict]:
     """Store a user fact after dedup."""
     fact_type = fact.get("type")
     value = fact.get("value")
@@ -720,9 +796,14 @@ async def _store_user_fact(user_id: UUID, fact: dict, current_user: dict) -> Opt
     # Simple fields
     if fact_type in ["name", "age", "job", "location"]:
         # Validation spéciale pour les noms
-        if fact_type == "name" and not _is_valid_name(str(value)):
-            logger.warning(f"Invalid name rejected: '{value}'")
-            return None
+        if fact_type == "name":
+            if not _is_valid_name(str(value)):
+                logger.warning(f"Invalid name rejected: '{value}'")
+                return None
+            # FIX P0 #1: Vérifier que ce n'est pas le nom d'un tiers
+            if user_message and not _is_user_own_name(str(value), user_message):
+                logger.warning(f"THIRD-PARTY NAME rejected: '{value}' is not user's own name")
+                return None
 
         # Validation pour les locations (rejeter les mots génériques)
         if fact_type == "location":

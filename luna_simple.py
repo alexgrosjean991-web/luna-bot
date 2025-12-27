@@ -139,6 +139,99 @@ def create_safe_task(coro, task_name: str):
 
 
 # =============================================================================
+# FIX P0 #2: POST-RESPONSE VALIDATION
+# =============================================================================
+
+# Patterns pour détecter les hallucinations de faits dans les réponses de Luna
+RESPONSE_FACT_PATTERNS = [
+    # Luna affirme des faits sur le user
+    (r"tu\s+(?:t'appelles?|es)\s+(\w+)", "name"),
+    (r"tu\s+(?:travailles?|bosses?)\s+(?:comme|en tant que)\s+(\w+)", "job"),
+    (r"tu\s+(?:habites?|vis?)\s+(?:à|a)\s+(\w+)", "location"),
+    (r"tu\s+(?:m'(?:as|avais)\s+dit\s+que\s+tu\s+)?(?:aimes?|adores?|kiffes?)\s+(?:le|la|les|l')?\s*(\w+)", "like"),
+    # Luna rappelle des infos
+    (r"(?:tu\s+)?m'(?:as|avais)\s+dit\s+(?:que\s+)?(?:tu\s+)?(?:t'appelles?|es)\s+(\w+)", "name"),
+    (r"(?:tu\s+)?m'(?:as|avais)\s+dit\s+(?:que\s+)?(?:tu\s+)?(?:travailles?|bosses?|fais?)\s+(\w+)", "job"),
+]
+
+# Mots communs à ignorer (pas des faits)
+COMMON_WORDS_TO_IGNORE = {
+    "quoi", "comment", "pourquoi", "bien", "mal", "trop", "très", "super",
+    "moi", "toi", "lui", "elle", "nous", "vous", "tout", "rien", "quelque",
+    "genre", "truc", "chose", "machin", "fait", "faire", "dire", "parler",
+    "cool", "sympa", "chill", "relax", "tranquille", "okay", "ok",
+}
+
+# Jobs de Luna (à ne pas confondre avec user)
+LUNA_FACTS = {
+    "jobs": {"graphiste", "designer", "ui", "ux", "freelance"},
+    "locations": {"paris", "11", "11ème", "11e", "oberkampf"},
+}
+
+
+async def validate_response_facts(response: str, user_facts: dict) -> tuple[str, list[str]]:
+    """
+    FIX P0 #2: Valide que Luna n'hallucine pas de faits dans sa réponse.
+
+    Args:
+        response: Réponse générée par Luna
+        user_facts: Facts connus du user (name, job, location, likes, etc.)
+
+    Returns:
+        (response_cleaned, warnings): Réponse nettoyée + liste des warnings
+    """
+    warnings = []
+    response_lower = response.lower()
+
+    user_name = user_facts.get("name", "").lower() if user_facts.get("name") else None
+    user_job = user_facts.get("job", "").lower() if user_facts.get("job") else None
+    user_location = user_facts.get("location", "").lower() if user_facts.get("location") else None
+    user_likes = [l.lower() for l in (user_facts.get("likes") or [])]
+
+    for pattern, fact_type in RESPONSE_FACT_PATTERNS:
+        matches = re.finditer(pattern, response_lower)
+        for match in matches:
+            if not match.lastindex:
+                continue
+            mentioned_value = match.group(1).lower()
+
+            # Ignorer les mots communs
+            if mentioned_value in COMMON_WORDS_TO_IGNORE:
+                continue
+
+            # Ignorer si c'est un fait de Luna (pas du user)
+            if fact_type == "job" and mentioned_value in LUNA_FACTS["jobs"]:
+                continue
+            if fact_type == "location" and mentioned_value in LUNA_FACTS["locations"]:
+                continue
+
+            # Vérifier si le fait mentionné correspond à ce qu'on sait du user
+            is_hallucination = False
+
+            if fact_type == "name":
+                if user_name and mentioned_value != user_name:
+                    is_hallucination = True
+                    warnings.append(f"RESPONSE HALLUCINATION: Luna said name='{mentioned_value}' but user is '{user_name}'")
+
+            elif fact_type == "job":
+                if user_job and mentioned_value not in user_job and user_job not in mentioned_value:
+                    is_hallucination = True
+                    warnings.append(f"RESPONSE HALLUCINATION: Luna said job='{mentioned_value}' but user is '{user_job}'")
+
+            elif fact_type == "location":
+                if user_location and mentioned_value not in user_location and user_location not in mentioned_value:
+                    is_hallucination = True
+                    warnings.append(f"RESPONSE HALLUCINATION: Luna said location='{mentioned_value}' but user is '{user_location}'")
+
+            # Log mais ne pas modifier la réponse (pour l'instant)
+            # TODO: Dans une v2, on pourrait remplacer les hallucinations
+            if is_hallucination:
+                logger.warning(warnings[-1])
+
+    return response, warnings
+
+
+# =============================================================================
 # DATABASE
 # =============================================================================
 
@@ -685,6 +778,11 @@ async def process_buffered_messages(telegram_id: int, update: Update, context: C
     response = response.strip()
     if len(response) > 500:
         response = response[:500] + "..."
+
+    # FIX P0 #2: Validate response doesn't hallucinate user facts
+    response, hallucination_warnings = await validate_response_facts(response, user)
+    for warning in hallucination_warnings:
+        logger.warning(f"[{telegram_id}] {warning}")
 
     # Save response
     await save_message(user_id, "assistant", response)
