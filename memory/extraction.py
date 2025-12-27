@@ -388,6 +388,15 @@ async def extract_unified(
     for fact in user_facts:
         if not isinstance(fact, dict):
             continue
+
+        # ANTI-HALLUCINATION: Pour les noms, vérifier qu'il apparaît VRAIMENT dans le message
+        if fact.get("type") == "name":
+            name_value = str(fact.get("value", "")).lower()
+            if name_value and name_value not in user_message.lower():
+                logger.warning(f"HALLUCINATION blocked: '{fact.get('value')}' not found in user message")
+                skipped.append(f"name hallucination: {fact.get('value')}")
+                continue
+
         if fact.get("value") and fact.get("importance", 0) >= min_importance:
             fact_stored = await _store_user_fact(user_id, fact, current_user)
             if fact_stored:
