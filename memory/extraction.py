@@ -98,11 +98,9 @@ HISTORIQUE RÉCENT:
 
 JSON strict - retourne UNIQUEMENT ce qui est NOUVEAU et SIGNIFICATIF:
 {{
-    "user_fact": {{
-        "type": "name|age|job|location|like|dislike|secret|family|null",
-        "value": "info sur L'UTILISATEUR uniquement, ou null",
-        "importance": 1-10
-    }},
+    "user_facts": [
+        {{"type": "name|age|job|location|like|dislike|secret|family", "value": "...", "importance": 1-10}}
+    ],
     "luna_statement": {{
         "revealed": "révélation personnelle de LUNA ou null",
         "topic": "famille|ex|peur|travail|secret|null",
@@ -129,6 +127,15 @@ JSON strict - retourne UNIQUEMENT ce qui est NOUVEAU et SIGNIFICATIF:
         "value": "la valeur détectée ou null"
     }}
 }}
+
+⚠️ IMPORTANT: user_facts est un ARRAY - tu peux extraire PLUSIEURS faits à la fois!
+Exemple: "Je m'appelle Lucas, je suis dev à Lyon" →
+"user_facts": [
+    {{"type": "name", "value": "Lucas", "importance": 8}},
+    {{"type": "job", "value": "développeur", "importance": 6}},
+    {{"type": "location", "value": "Lyon", "importance": 6}}
+]
+Si rien à extraire: "user_facts": []
 
 RÈGLES D'IMPORTANCE:
 - 9-10: Premier "je t'aime", conflit majeur, secret profond
@@ -206,6 +213,49 @@ def _extract_keywords(text: str) -> list[str]:
 
     from collections import Counter
     return [w for w, _ in Counter(keywords).most_common(5)]
+
+
+# =============================================================================
+# VALIDATION HELPERS
+# =============================================================================
+
+# Patterns that indicate bad inside jokes (Luna making errors)
+BAD_JOKE_PATTERNS = [
+    "luna a oublié", "luna oublie", "luna a confondu", "luna confond",
+    "luna s'excuse", "luna se trompe", "luna a raté", "erreur de luna",
+    "bug de luna", "luna ne se souvient pas", "luna a perdu",
+]
+
+# Patterns that indicate bad user patterns (user complaints)
+BAD_PATTERN_KEYWORDS = [
+    "oublie", "rappelle", "déjà dit", "répète", "mémoire", "souviens",
+    "confondu", "erreur", "bug", "problème",
+]
+
+
+def _is_bad_inside_joke(joke: dict) -> bool:
+    """Check if an inside joke is about Luna making mistakes."""
+    trigger = str(joke.get("trigger", "")).lower()
+    context = str(joke.get("context", "")).lower()
+    combined = f"{trigger} {context}"
+
+    for pattern in BAD_JOKE_PATTERNS:
+        if pattern in combined:
+            return True
+    return False
+
+
+def _is_bad_pattern(pattern: dict) -> bool:
+    """Check if a user pattern is about complaining."""
+    value = str(pattern.get("value", "")).lower()
+    pattern_type = str(pattern.get("pattern_type", "")).lower()
+
+    # communication_style patterns mentioning complaints are bad
+    if pattern_type == "communication_style":
+        for keyword in BAD_PATTERN_KEYWORDS:
+            if keyword in value:
+                return True
+    return False
 
 
 # =============================================================================
@@ -307,14 +357,25 @@ async def extract_unified(
     if not current_user:
         return {"extracted": extracted, "stored": {}, "skipped": ["user_not_found"]}
 
-    # --- USER FACT ---
-    user_fact = extracted.get("user_fact") or {}
-    if user_fact.get("value") and user_fact.get("importance", 0) >= min_importance:
-        fact_stored = await _store_user_fact(user_id, user_fact, current_user)
-        if fact_stored:
-            stored["user_fact"] = fact_stored
-        else:
-            skipped.append(f"user_fact: duplicate or invalid")
+    # --- USER FACTS (array) ---
+    user_facts = extracted.get("user_facts") or []
+    # Handle legacy single user_fact format
+    if not user_facts and extracted.get("user_fact"):
+        user_facts = [extracted.get("user_fact")]
+
+    stored_facts = []
+    for fact in user_facts:
+        if not isinstance(fact, dict):
+            continue
+        if fact.get("value") and fact.get("importance", 0) >= min_importance:
+            fact_stored = await _store_user_fact(user_id, fact, current_user)
+            if fact_stored:
+                stored_facts.append(fact_stored)
+            else:
+                skipped.append(f"user_fact ({fact.get('type')}): duplicate or invalid")
+
+    if stored_facts:
+        stored["user_facts"] = stored_facts
 
     # --- LUNA STATEMENT ---
     luna_stmt = extracted.get("luna_statement") or {}
@@ -334,12 +395,16 @@ async def extract_unified(
         else:
             skipped.append(f"emotional_event: duplicate or contradiction")
 
-    # --- INSIDE JOKE ---
+    # --- INSIDE JOKE (with validation) ---
     joke = extracted.get("inside_joke") or {}
     if joke.get("trigger") and joke.get("importance", 0) >= min_importance:
-        joke_stored = await _store_inside_joke(user_id, joke)
-        if joke_stored:
-            stored["inside_joke"] = joke_stored
+        # Filter out bad jokes mentioning Luna's mistakes
+        if not _is_bad_inside_joke(joke):
+            joke_stored = await _store_inside_joke(user_id, joke)
+            if joke_stored:
+                stored["inside_joke"] = joke_stored
+        else:
+            skipped.append("inside_joke: filtered (mentions Luna error)")
 
     # --- CALENDAR DATE ---
     cal_date = extracted.get("calendar_date") or {}
@@ -348,11 +413,15 @@ async def extract_unified(
         if date_stored:
             stored["calendar_date"] = date_stored
 
-    # --- USER PATTERN ---
+    # --- USER PATTERN (with validation) ---
     pattern = extracted.get("user_pattern") or {}
     if pattern.get("pattern_type") and pattern.get("value"):
-        await _update_user_pattern(user_id, pattern)
-        stored["user_pattern"] = pattern
+        # Filter out bad patterns mentioning user complaints
+        if not _is_bad_pattern(pattern):
+            await _update_user_pattern(user_id, pattern)
+            stored["user_pattern"] = pattern
+        else:
+            skipped.append("user_pattern: filtered (mentions complaint)")
 
     if stored:
         logger.info(f"Unified extraction stored: {list(stored.keys())}")
