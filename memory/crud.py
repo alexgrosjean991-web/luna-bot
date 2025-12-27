@@ -463,3 +463,306 @@ async def cleanup_old_cold_events(user_id: UUID, keep_count: int = 50) -> int:
             logger.info(f"Cleaned up {count} old cold events for user {user_id}")
 
         return count
+
+
+# =============================================================================
+# SUMMARIES (Weekly/Monthly)
+# =============================================================================
+
+async def add_summary(
+    user_id: UUID,
+    summary_type: str,  # 'weekly' or 'monthly'
+    period: str,  # '2025-W03' or '2025-01'
+    summary: str,
+    highlights: list[str] = None,
+    archived_data: dict = None
+) -> dict:
+    """Ajoute un résumé hebdo ou mensuel."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow("""
+            INSERT INTO memory_summaries
+                (user_id, type, period, summary, highlights, archived_data)
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb)
+            ON CONFLICT (user_id, period) DO UPDATE SET
+                summary = EXCLUDED.summary,
+                highlights = EXCLUDED.highlights,
+                archived_data = EXCLUDED.archived_data
+            RETURNING *
+        """, user_id, summary_type, period,
+             summary, json.dumps(highlights or []), json.dumps(archived_data or {}))
+
+        logger.info(f"Summary added: [{summary_type}] {period}")
+        return dict(row) if row else None
+
+
+async def get_summaries(
+    user_id: UUID,
+    summary_type: str = None,
+    limit: int = 12
+) -> list[dict]:
+    """Récupère les résumés d'un user."""
+    async with get_pool().acquire() as conn:
+        if summary_type:
+            rows = await conn.fetch("""
+                SELECT * FROM memory_summaries
+                WHERE user_id = $1 AND type = $2
+                ORDER BY created_at DESC
+                LIMIT $3
+            """, user_id, summary_type, limit)
+        else:
+            rows = await conn.fetch("""
+                SELECT * FROM memory_summaries
+                WHERE user_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2
+            """, user_id, limit)
+
+        return [dict(r) for r in rows]
+
+
+async def get_latest_summary(user_id: UUID, summary_type: str) -> Optional[dict]:
+    """Récupère le dernier résumé d'un type."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT * FROM memory_summaries
+            WHERE user_id = $1 AND type = $2
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, user_id, summary_type)
+
+        return dict(row) if row else None
+
+
+# =============================================================================
+# CALENDAR DATES
+# =============================================================================
+
+async def add_calendar_date(
+    user_id: UUID,
+    date: str,
+    event: str,
+    event_type: str,
+    importance: int = 7
+) -> None:
+    """Ajoute une date au calendrier."""
+    async with get_pool().acquire() as conn:
+        new_date = {
+            "date": date,
+            "event": event,
+            "type": event_type,
+            "importance": importance
+        }
+
+        await conn.execute("""
+            UPDATE memory_users
+            SET calendar_dates = (
+                SELECT jsonb_agg(elem)
+                FROM (
+                    SELECT elem FROM jsonb_array_elements(calendar_dates) elem
+                    WHERE elem->>'date' != $2
+                    UNION ALL
+                    SELECT $3::jsonb
+                ) sub
+            ),
+            updated_at = NOW()
+            WHERE id = $1
+        """, user_id, date, json.dumps(new_date))
+
+
+async def get_upcoming_dates(user_id: UUID, days_ahead: int = 7) -> list[dict]:
+    """Récupère les dates dans les N prochains jours."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    future = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT calendar_dates FROM memory_users WHERE id = $1
+        """, user_id)
+
+        if not row or not row["calendar_dates"]:
+            return []
+
+        dates = row["calendar_dates"]
+        if isinstance(dates, str):
+            dates = json.loads(dates)
+
+        return [d for d in dates if today <= d.get("date", "") <= future]
+
+
+async def cleanup_past_dates(user_id: UUID) -> int:
+    """Supprime les dates passées."""
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    async with get_pool().acquire() as conn:
+        result = await conn.execute("""
+            UPDATE memory_users
+            SET calendar_dates = (
+                SELECT COALESCE(jsonb_agg(elem), '[]'::jsonb)
+                FROM jsonb_array_elements(calendar_dates) elem
+                WHERE elem->>'date' >= $2
+            ),
+            updated_at = NOW()
+            WHERE id = $1
+        """, user_id, today)
+
+        return 1 if result else 0
+
+
+# =============================================================================
+# LUNA LIFE
+# =============================================================================
+
+async def update_luna_life(user_id: UUID, updates: dict) -> None:
+    """Met à jour la vie de Luna."""
+    async with get_pool().acquire() as conn:
+        await conn.execute("""
+            UPDATE memory_users
+            SET luna_current_life = luna_current_life || $2::jsonb,
+                updated_at = NOW()
+            WHERE id = $1
+        """, user_id, json.dumps(updates))
+
+
+async def get_luna_life(user_id: UUID) -> dict:
+    """Récupère la vie actuelle de Luna."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT luna_current_life FROM memory_users WHERE id = $1
+        """, user_id)
+
+        if row and row["luna_current_life"]:
+            return row["luna_current_life"]
+        return {}
+
+
+# =============================================================================
+# USER PATTERNS
+# =============================================================================
+
+async def update_user_patterns(user_id: UUID, pattern_type: str, value) -> None:
+    """Met à jour un pattern utilisateur."""
+    async with get_pool().acquire() as conn:
+        await conn.execute("""
+            UPDATE memory_users
+            SET user_patterns = jsonb_set(
+                COALESCE(user_patterns, '{}'),
+                $2::text[],
+                $3::jsonb
+            ),
+            updated_at = NOW()
+            WHERE id = $1
+        """, user_id, [pattern_type], json.dumps(value))
+
+
+async def get_user_patterns(user_id: UUID) -> dict:
+    """Récupère les patterns utilisateur."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT user_patterns FROM memory_users WHERE id = $1
+        """, user_id)
+
+        if row and row["user_patterns"]:
+            return row["user_patterns"]
+        return {}
+
+
+# =============================================================================
+# INSIDE JOKES (Enhanced)
+# =============================================================================
+
+async def add_inside_joke_v2(
+    user_id: UUID,
+    trigger: str,
+    context: str,
+    importance: int = 6
+) -> None:
+    """Ajoute un inside joke avec tracking."""
+    now = datetime.now().isoformat()
+
+    async with get_pool().acquire() as conn:
+        # Check if joke exists
+        rel = await conn.fetchrow("""
+            SELECT inside_jokes FROM memory_relationships WHERE user_id = $1
+        """, user_id)
+
+        jokes = rel["inside_jokes"] if rel and rel["inside_jokes"] else []
+        if isinstance(jokes, str):
+            jokes = json.loads(jokes)
+
+        # Find existing joke by trigger
+        existing_idx = next(
+            (i for i, j in enumerate(jokes)
+             if isinstance(j, dict) and j.get("trigger", "").lower() == trigger.lower()),
+            None
+        )
+
+        if existing_idx is not None:
+            # Update existing
+            jokes[existing_idx]["times_used"] = jokes[existing_idx].get("times_used", 0) + 1
+            jokes[existing_idx]["last_used"] = now
+        else:
+            # Add new
+            jokes.append({
+                "trigger": trigger,
+                "context": context,
+                "importance": importance,
+                "times_used": 1,
+                "last_used": now,
+                "created_at": now
+            })
+
+        # Sort by usage and keep top 15
+        jokes = sorted(
+            [j for j in jokes if isinstance(j, dict)],
+            key=lambda x: (x.get("times_used", 0) * 2 + x.get("importance", 0)),
+            reverse=True
+        )[:15]
+
+        await conn.execute("""
+            UPDATE memory_relationships
+            SET inside_jokes = $2::jsonb,
+                updated_at = NOW()
+            WHERE user_id = $1
+        """, user_id, json.dumps(jokes))
+
+
+async def get_inside_jokes_v2(user_id: UUID, limit: int = 10) -> list[dict]:
+    """Récupère les inside jokes triés par usage."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT inside_jokes FROM memory_relationships WHERE user_id = $1
+        """, user_id)
+
+        if not row or not row["inside_jokes"]:
+            return []
+
+        jokes = row["inside_jokes"]
+        if isinstance(jokes, str):
+            jokes = json.loads(jokes)
+
+        # Filter valid jokes and sort
+        valid_jokes = [j for j in jokes if isinstance(j, dict) and j.get("trigger")]
+        return sorted(
+            valid_jokes,
+            key=lambda x: (x.get("times_used", 0) * 2 + x.get("importance", 0)),
+            reverse=True
+        )[:limit]
+
+
+# =============================================================================
+# BULK OPERATIONS
+# =============================================================================
+
+async def get_all_active_users(days_inactive: int = 30) -> list[dict]:
+    """Récupère tous les users actifs récemment."""
+    cutoff = datetime.now() - timedelta(days=days_inactive)
+
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT u.*, r.day, r.paid
+            FROM memory_users u
+            JOIN memory_relationships r ON r.user_id = u.id
+            WHERE u.updated_at > $1
+        """, cutoff)
+
+        return [dict(r) for r in rows]

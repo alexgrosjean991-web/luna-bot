@@ -1,12 +1,23 @@
 """
-Memory System - Context Retrieval
+Memory System V2 - Context Retrieval
 
 Construit le contexte mémoire à injecter dans les prompts Luna.
-Priorise: pinned > hot > relevant keywords > warm
+Budget: ~5K tokens max pour le contexte mémoire.
+
+Priorisation:
+1. Pinned events (toujours)
+2. Hot events (score élevé en premier)
+3. Inside jokes actifs
+4. Upcoming calendar dates
+5. Luna's current life
+6. User patterns
+7. Relevant events (keyword match)
+8. Weekly summary (si > 30 jours)
 """
 
 import logging
 import re
+from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
@@ -19,11 +30,20 @@ from .crud import (
     get_events_by_keywords,
     get_luna_said,
     get_user_state,
+    # V2: New queries
+    get_upcoming_dates,
+    get_inside_jokes_v2,
+    get_user_patterns,
+    get_luna_life,
+    get_latest_summary,
 )
 from .coherence import check_luna_coherence, build_memory_reminder, build_dont_invent_reminder
 from .models import MemoryContext, RelationshipStatus
 
 logger = logging.getLogger(__name__)
+
+# Token budget approximation (1 token ≈ 4 chars in French)
+MAX_CONTEXT_CHARS = 20000  # ~5K tokens
 
 
 # =============================================================================
@@ -32,7 +52,6 @@ logger = logging.getLogger(__name__)
 
 def extract_message_keywords(message: str) -> list[str]:
     """Extrait les mots-clés d'un message pour la recherche."""
-    # Topics importants
     topic_keywords = {
         "travail": ["travail", "job", "boulot", "bureau", "boss", "collègue"],
         "famille": ["famille", "père", "mère", "frère", "soeur", "parent"],
@@ -53,7 +72,6 @@ def extract_message_keywords(message: str) -> list[str]:
                 found_keywords.append(topic)
                 break
 
-    # Ajouter les mots significatifs (> 5 chars)
     words = re.findall(r'\b[a-zéèêëàâäùûüôöîïç]{5,}\b', msg_lower)
     stopwords = {"vraiment", "toujours", "jamais", "encore", "quand", "comment", "pourquoi"}
     found_keywords.extend([w for w in words[:5] if w not in stopwords])
@@ -62,7 +80,7 @@ def extract_message_keywords(message: str) -> list[str]:
 
 
 # =============================================================================
-# CONTEXT BUILDING
+# CONTEXT BUILDING V2
 # =============================================================================
 
 async def get_memory_context(
@@ -72,16 +90,8 @@ async def get_memory_context(
 ) -> MemoryContext:
     """
     Construit le contexte mémoire complet pour le prompt.
-
-    Args:
-        user_id: UUID de l'utilisateur
-        current_message: Message actuel de l'user
-        include_coherence: Inclure le check de cohérence
-
-    Returns:
-        MemoryContext avec tous les éléments
+    Version 2 avec inside_jokes, calendar, patterns.
     """
-    # Récupérer les données de base
     user = await get_user_by_id(user_id)
     relationship = await get_relationship(user_id)
     state = await get_user_state(user_id)
@@ -90,22 +100,21 @@ async def get_memory_context(
         logger.warning(f"User or relationship not found for {user_id}")
         return _empty_context()
 
-    # Récupérer les événements
+    # Events de base
     pinned = await get_pinned_events(user_id)
     hot = await get_hot_events(user_id, limit=5)
 
-    # Recherche par keywords du message actuel
+    # Keyword search
     keywords = extract_message_keywords(current_message)
     relevant = []
     if keywords:
         relevant = await get_events_by_keywords(user_id, keywords, limit=3)
 
-    # Ce que Luna a dit sur les topics mentionnés
+    # Luna coherence check
     luna_said = []
     if include_coherence:
         coherence = await check_luna_coherence(user_id, current_message)
         if coherence["has_previous"]:
-            # Récupérer les événements luna_said correspondants
             for topic in keywords[:3]:
                 topic_luna_said = await get_luna_said(user_id, topic, limit=2)
                 luna_said.extend(topic_luna_said)
@@ -125,62 +134,131 @@ async def build_prompt_context(
     current_message: str
 ) -> str:
     """
-    Construit la section mémoire à injecter dans le prompt Luna.
+    Construit la section mémoire V2 à injecter dans le prompt Luna.
+    Inclut: inside_jokes, calendar, user_patterns, luna_life.
 
-    Returns:
-        String formaté à ajouter au prompt système
+    Token budget: ~5K tokens max.
     """
     ctx = await get_memory_context(user_id, current_message)
-
     parts = []
+    total_chars = 0
 
-    # 1. Memory reminder (qui est l'user)
+    def add_part(text: str, priority: int = 5) -> bool:
+        """Add a part if within budget. Returns True if added."""
+        nonlocal total_chars
+        if total_chars + len(text) > MAX_CONTEXT_CHARS:
+            return False
+        parts.append((priority, text))
+        total_chars += len(text)
+        return True
+
+    # 1. User identity reminder (highest priority)
     user_reminder = build_memory_reminder(ctx["user"], ctx["relationship"])
     if user_reminder:
-        parts.append(user_reminder)
+        add_part(user_reminder, priority=10)
 
-    # 2. Événements récents (hot)
+    # 2. V2: Upcoming dates (important for immersion)
+    upcoming = await get_upcoming_dates(user_id, limit=3)
+    if upcoming:
+        dates_text = "\n".join([
+            f"- {d['date']}: {d['event']} ({d['type']})"
+            for d in upcoming
+        ])
+        add_part(f"📅 DATES À VENIR:\n{dates_text}", priority=9)
+
+    # 3. V2: Inside jokes (active ones)
+    jokes = await get_inside_jokes_v2(user_id)
+    active_jokes = [j for j in jokes if j.get("times_used", 0) >= 2][:5]
+    if active_jokes:
+        jokes_text = "\n".join([
+            f"- \"{j['trigger']}\" → {j['context']}"
+            for j in active_jokes
+        ])
+        add_part(f"😂 INSIDE JOKES:\n{jokes_text}", priority=8)
+
+    # 4. Hot events (sorted by score)
     if ctx["hot_events"]:
+        sorted_events = sorted(ctx["hot_events"], key=lambda e: e.get("score", 5), reverse=True)
         events_text = "\n".join([
             f"- [{e['type']}] {e['summary']}"
-            for e in ctx["hot_events"][:3]
+            for e in sorted_events[:4]
         ])
-        parts.append(f"📅 ÉVÉNEMENTS RÉCENTS:\n{events_text}")
+        add_part(f"🔥 ÉVÉNEMENTS RÉCENTS:\n{events_text}", priority=7)
 
-    # 3. Événements pertinents au message
-    if ctx["relevant_events"]:
-        relevant_text = "\n".join([
-            f"- {e['summary']}"
-            for e in ctx["relevant_events"][:2]
-        ])
-        parts.append(f"🔍 PERTINENT À CE MESSAGE:\n{relevant_text}")
-
-    # 4. Cohérence - ce que Luna a déjà dit
+    # 5. Coherence - what Luna already said
     if ctx["luna_said"]:
         luna_text = "\n".join([
             f"- {e['summary']}"
             for e in ctx["luna_said"][:3]
         ])
-        parts.append(f"⚠️ TU AS DÉJÀ DIT:\n{luna_text}\nReste cohérente avec ces déclarations.")
+        add_part(f"⚠️ TU AS DÉJÀ DIT:\n{luna_text}\nReste cohérente.", priority=9)
 
-    # 5. Règle anti-invention
-    parts.append(build_dont_invent_reminder())
+    # 6. V2: User patterns (helps Luna adapt)
+    patterns = await get_user_patterns(user_id)
+    if patterns:
+        pattern_parts = []
+        if patterns.get("active_hours"):
+            hours = patterns["active_hours"]
+            pattern_parts.append(f"Actif vers {hours[0]}h-{hours[-1]}h" if len(hours) > 1 else f"Actif vers {hours[0]}h")
+        if patterns.get("communication_style"):
+            pattern_parts.append(f"Style: {patterns['communication_style']}")
+        if patterns.get("mood_triggers"):
+            pattern_parts.append(f"Sensible à: {', '.join(patterns['mood_triggers'][:3])}")
+        if pattern_parts:
+            add_part(f"🎯 PROFIL USER:\n" + "\n".join(pattern_parts), priority=6)
 
-    # 6. Relationship stage
+    # 7. V2: Luna's current life (immersion)
+    luna_life = await get_luna_life(user_id)
+    if luna_life:
+        life_parts = []
+        if luna_life.get("mood"):
+            life_parts.append(f"Luna est {luna_life['mood']}")
+        if luna_life.get("current_project"):
+            life_parts.append(f"Travaille sur: {luna_life['current_project']}")
+        if luna_life.get("pixel_status"):
+            life_parts.append(f"Pixel: {luna_life['pixel_status']}")
+        if luna_life.get("recent_event"):
+            life_parts.append(f"Event: {luna_life['recent_event']}")
+        if life_parts:
+            add_part(f"🏠 VIE DE LUNA:\n" + "\n".join(life_parts), priority=5)
+
+    # 8. Relevant events (if message triggers keywords)
+    if ctx["relevant_events"]:
+        relevant_text = "\n".join([
+            f"- {e['summary']}"
+            for e in ctx["relevant_events"][:2]
+        ])
+        add_part(f"🔍 PERTINENT:\n{relevant_text}", priority=6)
+
+    # 9. V2: Weekly summary (if > 30 days relationship)
+    relationship = ctx.get("relationship", {})
+    if relationship.get("day", 0) > 30:
+        summary = await get_latest_summary(user_id, "weekly")
+        if summary:
+            add_part(f"📝 RÉSUMÉ RÉCENT:\n{summary['summary'][:300]}", priority=4)
+
+    # 10. Anti-invention rule (always include)
+    add_part(build_dont_invent_reminder(), priority=10)
+
+    # 11. Relationship stage
     stage = _get_relationship_stage(ctx["relationship"])
-    parts.append(f"📊 STADE RELATION: {stage}")
+    add_part(f"📊 STADE: {stage}", priority=8)
 
-    return "\n\n".join(parts)
+    # Sort by priority (highest first) and join
+    parts.sort(key=lambda x: x[0], reverse=True)
+    return "\n\n".join(text for _, text in parts)
 
 
 async def get_quick_context(user_id: UUID) -> dict:
     """
     Contexte rapide pour décisions (sans recherche keywords).
-    Utilisé pour le routing LLM, modifiers, etc.
+    V2: Inclut patterns et luna_life.
     """
     user = await get_user_by_id(user_id)
     relationship = await get_relationship(user_id)
     state = await get_user_state(user_id)
+    patterns = await get_user_patterns(user_id)
+    luna_life = await get_luna_life(user_id)
 
     return {
         "name": user.get("name") if user else None,
@@ -189,7 +267,42 @@ async def get_quick_context(user_id: UUID) -> dict:
         "trust": relationship.get("trust", 1) if relationship else 1,
         "paid": relationship.get("paid", False) if relationship else False,
         "luna_mood": state.get("luna_mood", "neutral") if state else "neutral",
+        # V2 additions
+        "user_patterns": patterns or {},
+        "luna_life": luna_life or {},
     }
+
+
+# =============================================================================
+# V2: SUMMARY CONTEXT
+# =============================================================================
+
+async def get_compressed_context(user_id: UUID) -> str:
+    """
+    Get compressed context from summaries for long-term users.
+    Used when relationship > 90 days.
+    """
+    relationship = await get_relationship(user_id)
+    day = relationship.get("day", 1) if relationship else 1
+
+    if day < 90:
+        return ""
+
+    # Get latest monthly and weekly summaries
+    monthly = await get_latest_summary(user_id, "monthly")
+    weekly = await get_latest_summary(user_id, "weekly")
+
+    parts = []
+
+    if monthly:
+        parts.append(f"📅 RÉSUMÉ MENSUEL ({monthly.get('period', 'récent')}):\n{monthly['summary'][:500]}")
+
+    if weekly:
+        highlights = weekly.get("highlights", [])
+        if highlights:
+            parts.append(f"✨ MOMENTS CLÉS:\n" + "\n".join(f"- {h}" for h in highlights[:5]))
+
+    return "\n\n".join(parts)
 
 
 # =============================================================================
@@ -283,4 +396,4 @@ def get_onboarding_nudge(day: int) -> Optional[str]:
         return ONBOARDING_NUDGES.get(day)
     elif day <= 14:
         return ONBOARDING_NUDGES.get(6)
-    return None  # Plus de nudge après jour 14
+    return None

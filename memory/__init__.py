@@ -10,6 +10,12 @@ from .models import (
     EventType,
     RelationshipStatus,
     TierThreshold,
+    # V2: New types
+    InsideJoke,
+    CalendarDate,
+    UserPatterns,
+    LunaCurrentLife,
+    WeeklySummary,
 )
 
 from .crud import (
@@ -37,6 +43,25 @@ from .crud import (
     find_similar_event,
     update_tiers,
     cleanup_old_cold_events,
+    # V2: Summaries
+    add_summary,
+    get_summaries,
+    get_latest_summary,
+    # V2: Calendar
+    add_calendar_date,
+    get_upcoming_dates,
+    cleanup_past_dates,
+    # V2: Luna life
+    update_luna_life,
+    get_luna_life,
+    # V2: User patterns
+    update_user_patterns,
+    get_user_patterns,
+    # V2: Inside jokes enhanced
+    add_inside_joke_v2,
+    get_inside_jokes_v2,
+    # V2: Bulk
+    get_all_active_users,
 )
 
 from .coherence import (
@@ -50,8 +75,9 @@ from .coherence import (
 
 from .extraction import (
     set_api_key as set_extraction_api_key,
-    extract_user_facts,
-    extract_luna_said,
+    extract_unified,  # V2: Single LLM call for all
+    extract_user_facts,  # Legacy wrapper
+    extract_luna_said,   # Legacy wrapper
     extract_from_history,
 )
 
@@ -60,6 +86,14 @@ from .retrieval import (
     build_prompt_context,
     get_quick_context,
     get_onboarding_nudge,
+    get_compressed_context,  # V2: For long-term users
+)
+
+from .compression import (
+    set_api_key as set_compression_api_key,
+    run_weekly_compression,
+    run_monthly_compression,
+    schedule_compression_jobs,
 )
 
 __all__ = [
@@ -73,6 +107,11 @@ __all__ = [
     "EventType",
     "RelationshipStatus",
     "TierThreshold",
+    "InsideJoke",
+    "CalendarDate",
+    "UserPatterns",
+    "LunaCurrentLife",
+    "WeeklySummary",
     # CRUD
     "set_pool",
     "get_pool",
@@ -98,6 +137,20 @@ __all__ = [
     "find_similar_event",
     "update_tiers",
     "cleanup_old_cold_events",
+    # V2: New CRUD
+    "add_summary",
+    "get_summaries",
+    "get_latest_summary",
+    "add_calendar_date",
+    "get_upcoming_dates",
+    "cleanup_past_dates",
+    "update_luna_life",
+    "get_luna_life",
+    "update_user_patterns",
+    "get_user_patterns",
+    "add_inside_joke_v2",
+    "get_inside_jokes_v2",
+    "get_all_active_users",
     # Coherence
     "check_luna_coherence",
     "check_user_contradiction",
@@ -107,12 +160,19 @@ __all__ = [
     "build_dont_invent_reminder",
     # Extraction
     "set_extraction_api_key",
-    "extract_user_facts",
-    "extract_luna_said",
+    "extract_unified",       # V2: Single LLM call
+    "extract_user_facts",    # Legacy
+    "extract_luna_said",     # Legacy
     "extract_from_history",
     # Retrieval
     "get_memory_context",
     "build_prompt_context",
     "get_quick_context",
     "get_onboarding_nudge",
+    "get_compressed_context",
+    # Compression
+    "set_compression_api_key",
+    "run_weekly_compression",
+    "run_monthly_compression",
+    "schedule_compression_jobs",
 ]

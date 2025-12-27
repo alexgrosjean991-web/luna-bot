@@ -34,10 +34,13 @@ from memory import (
     get_user as memory_get_user,
     get_relationship,
     update_relationship,
-    extract_user_facts,
-    extract_luna_said,
+    extract_unified,  # V2: Single LLM call for all extraction
     build_prompt_context,
     update_tiers,
+    # V2: Compression
+    set_compression_api_key,
+    run_weekly_compression,
+    run_monthly_compression,
 )
 
 # NSFW Gate (post-paywall)
@@ -150,6 +153,7 @@ async def init_db():
     # Init memory system pool
     set_memory_pool(pool)
     set_extraction_api_key(OPENROUTER_API_KEY)
+    set_compression_api_key(OPENROUTER_API_KEY)  # V2: For weekly/monthly summaries
 
     # Init memory tables
     await init_memory_tables(pool)
@@ -555,11 +559,8 @@ async def process_buffered_messages(telegram_id: int, update: Update, context: C
     # Save combined user message
     await save_message(user_id, "user", combined_text)
 
-    # Get history for extraction
+    # Get history for extraction (used later with unified extraction)
     history = await get_history(user_id, limit=10)
-
-    # Extract facts using memory system (async, in background)
-    create_safe_task(extract_user_facts(user_id, combined_text, history), "extract_user_facts")
 
     # =========================================================================
     # PHASE SYSTEM (replaces old day-based logic)
@@ -688,8 +689,11 @@ async def process_buffered_messages(telegram_id: int, update: Update, context: C
     # Save response
     await save_message(user_id, "assistant", response)
 
-    # Extract what Luna said (async, in background)
-    create_safe_task(extract_luna_said(user_id, response, combined_text), "extract_luna_said")
+    # V2: Unified extraction - 1 LLM call for both user facts + Luna statements
+    create_safe_task(
+        extract_unified(user_id, combined_text, response, history),
+        "extract_unified"
+    )
 
     # Natural delay (shorter since we already waited BUFFER_DELAY)
     delay = random.uniform(0.3, 1.0)
@@ -940,6 +944,42 @@ async def main():
         update_memory_tiers,
         interval=3600,  # 1 hour
         first=300,
+    )
+
+    # V2: Weekly compression (Sundays at 3am Paris time)
+    async def weekly_compression_job(context):
+        try:
+            logger.info("Running weekly compression...")
+            stats = await run_weekly_compression()
+            logger.info(f"Weekly compression done: {stats}")
+        except Exception as e:
+            logger.error(f"Weekly compression error: {e}")
+
+    from datetime import time as dt_time
+    app.job_queue.run_daily(
+        weekly_compression_job,
+        time=dt_time(3, 0),  # 3:00 AM
+        days=(6,),  # Sunday only
+        name="weekly_compression"
+    )
+
+    # V2: Monthly compression (1st of month at 4am)
+    async def monthly_compression_job(context):
+        from datetime import datetime as dt
+        # Only run on 1st of month
+        if dt.now().day != 1:
+            return
+        try:
+            logger.info("Running monthly compression...")
+            stats = await run_monthly_compression()
+            logger.info(f"Monthly compression done: {stats}")
+        except Exception as e:
+            logger.error(f"Monthly compression error: {e}")
+
+    app.job_queue.run_daily(
+        monthly_compression_job,
+        time=dt_time(4, 0),  # 4:00 AM
+        name="monthly_compression"
     )
 
     # Start

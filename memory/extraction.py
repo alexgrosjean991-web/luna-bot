@@ -1,13 +1,21 @@
 """
-Memory System - Fact Extraction
+Memory System - Unified Extraction V2
 
-Utilise Haiku pour extraire les faits des messages.
-Avec déduplication pour éviter les doublons.
+UN SEUL appel LLM pour tout extraire:
+- user_fact: info sur l'utilisateur
+- luna_statement: révélation de Luna
+- emotional_event: moment émotionnel
+- inside_joke: blague partagée
+- calendar_date: date/événement à retenir
+- user_pattern: pattern comportemental
+
+Chaque extraction a un score d'importance 1-10.
 """
 
 import json
 import logging
 import re
+from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
@@ -19,6 +27,9 @@ from .crud import (
     update_user,
     add_event,
     find_similar_event,
+    add_inside_joke_v2,
+    add_calendar_date,
+    update_user_patterns,
 )
 from .coherence import check_user_contradiction
 
@@ -36,79 +47,81 @@ def set_api_key(key: str):
 
 
 # =============================================================================
-# EXTRACTION PROMPTS
+# UNIFIED EXTRACTION PROMPT
 # =============================================================================
 
-EXTRACT_USER_FACTS_PROMPT = """Tu extrais UNIQUEMENT les infos que L'UTILISATEUR dit sur LUI-MÊME.
+UNIFIED_EXTRACTION_PROMPT = """Tu extrais les informations mémorables de cette conversation.
 
-⚠️ DÉTAILS DE LUNA (LE BOT) À IGNORER ABSOLUMENT:
+⚠️ DÉTAILS DE LUNA (LE BOT) À NE PAS CONFONDRE:
 - Luna, 24 ans, graphiste freelance, Paris
 - Pixel (son chat roux)
 - Café Oberkampf, appartement Paris
 - Parents divorcés, père distant
 - Ex Théo, anxiété, insomnies
-- Fille unique
-→ Si tu vois ces éléments, c'est LUNA qui parle d'elle, PAS l'utilisateur!
+→ Quand Luna parle de ça, c'est luna_statement, PAS user_fact!
 
-MESSAGE DE L'UTILISATEUR:
-{message}
+MESSAGE UTILISATEUR:
+{user_message}
 
-HISTORIQUE (UTILISATEUR vs [LUNA/BOT]):
+RÉPONSE LUNA:
+{luna_response}
+
+HISTORIQUE RÉCENT:
 {history}
 
-JSON strict:
+JSON strict - retourne UNIQUEMENT ce qui est NOUVEAU et SIGNIFICATIF:
 {{
-    "name": "prénom que l'UTILISATEUR donne pour LUI-MÊME ou null",
-    "age": "âge que l'UTILISATEUR dit avoir ou null",
-    "job": "métier que l'UTILISATEUR dit faire ou null",
-    "location": "où l'UTILISATEUR dit habiter ou null",
-    "likes": ["ce que l'UTILISATEUR dit aimer"],
-    "dislikes": ["ce que l'UTILISATEUR dit ne pas aimer"],
-    "family": {{"relation": "membre de la famille de l'UTILISATEUR"}},
-    "secrets": ["confidences personnelles de l'UTILISATEUR"],
-    "moment": "événement vécu par l'UTILISATEUR ou null"
+    "user_fact": {{
+        "type": "name|age|job|location|like|dislike|secret|family|null",
+        "value": "la valeur extraite ou null",
+        "importance": 1-10
+    }},
+    "luna_statement": {{
+        "revealed": "révélation personnelle de Luna ou null",
+        "topic": "famille|ex|peur|travail|secret|null",
+        "importance": 1-10
+    }},
+    "emotional_event": {{
+        "summary": "événement émotionnel ou null",
+        "type": "moment|conflict|milestone|null",
+        "importance": 1-10
+    }},
+    "inside_joke": {{
+        "trigger": "mot/phrase déclencheur ou null",
+        "context": "pourquoi c'est drôle ou null",
+        "importance": 1-10
+    }},
+    "calendar_date": {{
+        "date": "YYYY-MM-DD ou null",
+        "event": "description ou null",
+        "type": "anniversary|promise|plan|birthday|null",
+        "importance": 1-10
+    }},
+    "user_pattern": {{
+        "pattern_type": "active_hours|mood_trigger|communication_style|null",
+        "value": "la valeur détectée ou null"
+    }}
 }}
 
-RÈGLES:
-- UNIQUEMENT ce que l'UTILISATEUR dit sur LUI-MÊME
-- Les messages [LUNA/BOT] = IGNORER TOTALEMENT
-- "Pixel", "Oberkampf", "graphiste", "Paris" = détails de Luna → IGNORER
-- Si pas dit explicitement par l'utilisateur → null ou []
-"""
+RÈGLES D'IMPORTANCE:
+- 9-10: Premier "je t'aime", conflit majeur, secret profond
+- 7-8: Révélation personnelle, promesse, moment fort
+- 5-6: Info utile, préférence importante
+- 3-4: Détail mineur mais mémorable
+- 1-2: Trivial, à ignorer
 
-EXTRACT_LUNA_SAID_PROMPT = """Extrais UNIQUEMENT les RÉVÉLATIONS PERSONNELLES de Luna sur sa vie.
+❌ Retourne null/1 pour:
+- Réactions banales ("mdr", "ok", "cool")
+- Questions sans révélation
+- Répétitions d'infos déjà connues
+- Phrases génériques
 
-RÉPONSE DE LUNA:
-{response}
-
-CONTEXTE:
-{context}
-
-Une révélation = Luna partage quelque chose de PERSONNEL sur:
-- Sa famille (parents, ex)
-- Ses émotions/peurs
-- Son passé/souvenirs
-- Ses secrets
-
-JSON strict:
-{{
-    "revealed": "la révélation personnelle ou null",
-    "topic": "famille/ex/peur/travail/secret ou null",
-    "keywords": ["mots-clés"]
-}}
-
-❌ NE PAS EXTRAIRE (retourner null):
-- Réponses factuelles ("il est 23h", "je suis sûre")
-- Réactions ("mdr", "ah cool", "ok")
-- Questions de Luna
-- Phrases génériques ("je suis là", "pas grand chose")
-- Descriptions d'actions ("je te suis en PV")
-
-✅ EXTRAIRE SEULEMENT:
-- "mes parents sont divorcés" → révélation famille
-- "mon ex m'a fait du mal" → révélation ex
-- "j'ai peur d'être abandonnée" → révélation peur
-- "je fais de l'anxiété" → révélation personnel
+✅ Retourne des valeurs pour:
+- Nouvelles infos factuelles (prénom, métier, etc.)
+- Révélations émotionnelles
+- Moments partagés uniques
+- Promesses ou plans futurs
+- Blagues récurrentes
 """
 
 
@@ -129,7 +142,6 @@ def _safe_parse_json(content: str) -> Optional[dict]:
     content = re.sub(r'```\s*', '', content)
 
     # Trouver le premier objet JSON complet
-    # On utilise une approche par comptage de braces
     start = content.find('{')
     if start == -1:
         return None
@@ -156,242 +168,8 @@ def _safe_parse_json(content: str) -> Optional[dict]:
         return None
 
 
-# =============================================================================
-# EXTRACTION FUNCTIONS
-# =============================================================================
-
-async def extract_user_facts(
-    user_id: UUID,
-    message: str,
-    history: list[dict]
-) -> dict:
-    """
-    Extrait les faits user d'un message via Haiku.
-
-    Returns:
-        {
-            "extracted": dict,  # Facts bruts extraits
-            "stored": dict,     # Ce qui a été stocké (après dedup)
-            "skipped": list,    # Ce qui a été ignoré (doublons)
-        }
-    """
-    if not OPENROUTER_API_KEY:
-        logger.error("API key not set for extraction")
-        return {"extracted": {}, "stored": {}, "skipped": []}
-
-    # Formater l'historique (être TRÈS explicite sur qui parle)
-    history_text = "\n".join([
-        f"UTILISATEUR: {m.get('content', '')[:100]}" if m.get('role') == 'user'
-        else f"[LUNA/BOT - IGNORER]: {m.get('content', '')[:100]}"
-        for m in history[-5:]
-    ])
-
-    # Appel Haiku
-    prompt = EXTRACT_USER_FACTS_PROMPT.format(
-        message=message,
-        history=history_text or "(pas d'historique)"
-    )
-
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": HAIKU_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 500,
-                    "temperature": 0,
-                }
-            )
-
-            data = response.json()
-
-            # Check for API errors
-            if "choices" not in data:
-                logger.warning(f"OpenRouter error (no choices): {data.get('error', data)}")
-                return {"extracted": {}, "stored": {}, "skipped": []}
-
-            content = data["choices"][0]["message"]["content"]
-
-            # Parser JSON - utiliser une méthode plus robuste
-            extracted = _safe_parse_json(content)
-            if not extracted:
-                logger.warning(f"No JSON found in extraction response: {content[:100]}")
-                return {"extracted": {}, "stored": {}, "skipped": []}
-
-    except Exception as e:
-        logger.error(f"Extraction error: {e}")
-        return {"extracted": {}, "stored": {}, "skipped": []}
-
-    # Déduplication et stockage
-    stored = {}
-    skipped = []
-
-    # Récupérer les faits actuels pour comparer
-    current_user = await get_user_by_id(user_id)
-    if not current_user:
-        return {"extracted": extracted, "stored": {}, "skipped": []}
-
-    # Traiter chaque fait
-    updates = {}
-
-    # Facts simples (name, age, job, location)
-    for field in ["name", "age", "job", "location"]:
-        new_value = extracted.get(field)
-        if new_value and new_value != current_user.get(field):
-            updates[field] = new_value
-            stored[field] = new_value
-
-    # Lists (likes, dislikes, secrets)
-    for field in ["likes", "dislikes", "secrets"]:
-        new_values = extracted.get(field, [])
-        if new_values:
-            existing = current_user.get(field, []) or []
-            # Filtrer les doublons (case insensitive)
-            existing_lower = [str(v).lower() for v in existing]
-            unique_new = [v for v in new_values if str(v).lower() not in existing_lower]
-
-            if unique_new:
-                updates[field] = unique_new
-                stored[field] = unique_new
-            else:
-                skipped.extend([f"{field}: {v}" for v in new_values])
-
-    # Family dict
-    family = extracted.get("family", {})
-    if family:
-        existing_family = current_user.get("family", {}) or {}
-        new_family = {k: v for k, v in family.items() if k not in existing_family}
-        if new_family:
-            updates["family"] = new_family
-            stored["family"] = new_family
-
-    # Stocker les updates
-    if updates:
-        await update_user(user_id, updates)
-        logger.info(f"Stored user facts: {list(updates.keys())}")
-
-    # Événement "moment" → timeline
-    moment = extracted.get("moment")
-    if moment:
-        # Check contradiction
-        keywords = _extract_keywords(moment)
-        contradiction = await check_user_contradiction(user_id, moment, keywords)
-
-        if contradiction["action"] == "store":
-            await add_event(
-                user_id=user_id,
-                event_type="moment",
-                summary=moment,
-                keywords=keywords,
-                score=7
-            )
-            stored["moment"] = moment
-            logger.info(f"Stored moment: {moment[:50]}...")
-        elif contradiction["action"] == "update":
-            # Mettre à jour l'événement existant
-            stored["moment"] = f"[updated] {moment}"
-        else:
-            skipped.append(f"moment: {moment} (contradiction)")
-
-    return {
-        "extracted": extracted,
-        "stored": stored,
-        "skipped": skipped
-    }
-
-
-async def extract_luna_said(
-    user_id: UUID,
-    luna_response: str,
-    user_message: str
-) -> Optional[dict]:
-    """
-    Extrait ce que Luna a révélé sur elle-même.
-
-    Returns:
-        {"revealed": str, "topic": str, "keywords": list} or None
-    """
-    if not OPENROUTER_API_KEY:
-        return None
-
-    # Skip si réponse courte (probablement pas de révélation)
-    if len(luna_response) < 50:
-        return None
-
-    prompt = EXTRACT_LUNA_SAID_PROMPT.format(
-        response=luna_response,
-        context=user_message[:200]
-    )
-
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": HAIKU_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 300,
-                    "temperature": 0,
-                }
-            )
-
-            data = response.json()
-
-            # Check for API errors
-            if "choices" not in data:
-                logger.warning(f"OpenRouter error (no choices): {data.get('error', data)}")
-                return None
-
-            content = data["choices"][0]["message"]["content"]
-
-            # Parser JSON - utiliser une méthode plus robuste
-            result = _safe_parse_json(content)
-            if not result:
-                return None
-
-            if not result.get("revealed"):
-                return None
-
-            # Dédup: vérifier si on a déjà ce luna_said
-            existing = await find_similar_event(
-                user_id,
-                result.get("keywords", []),
-                "luna_said"
-            )
-
-            if existing:
-                logger.debug(f"Luna_said already exists: {result['revealed'][:30]}...")
-                return None
-
-            # Stocker
-            await add_event(
-                user_id=user_id,
-                event_type="luna_said",
-                summary=result["revealed"],
-                keywords=result.get("keywords", []),
-                score=8  # Important pour cohérence
-            )
-
-            logger.info(f"Stored luna_said: {result['revealed'][:50]}...")
-            return result
-
-    except Exception as e:
-        logger.error(f"Luna_said extraction error: {e}")
-        return None
-
-
 def _extract_keywords(text: str) -> list[str]:
     """Extrait des keywords basiques d'un texte."""
-    # Mots importants (> 4 chars, pas de stopwords)
     stopwords = {
         "dans", "pour", "avec", "cette", "cette", "leur", "mais", "plus",
         "tout", "être", "avoir", "fait", "comme", "aussi", "même", "très",
@@ -401,9 +179,370 @@ def _extract_keywords(text: str) -> list[str]:
     words = re.findall(r'\b[a-zéèêëàâäùûüôöîïç]{4,}\b', text.lower())
     keywords = [w for w in words if w not in stopwords]
 
-    # Garder les 5 plus fréquents
     from collections import Counter
     return [w for w, _ in Counter(keywords).most_common(5)]
+
+
+# =============================================================================
+# UNIFIED EXTRACTION FUNCTION
+# =============================================================================
+
+async def extract_unified(
+    user_id: UUID,
+    user_message: str,
+    luna_response: str,
+    history: list[dict],
+    min_importance: int = 3
+) -> dict:
+    """
+    Extraction unifiée - UN SEUL appel LLM pour tout.
+
+    Args:
+        user_id: UUID de l'utilisateur
+        user_message: Message de l'utilisateur
+        luna_response: Réponse de Luna
+        history: Historique récent des messages
+        min_importance: Score minimum pour stocker (défaut: 3)
+
+    Returns:
+        {
+            "extracted": dict,      # Tout ce qui a été extrait
+            "stored": dict,         # Ce qui a été stocké en DB
+            "skipped": list,        # Ce qui a été ignoré (doublons, importance faible)
+        }
+    """
+    if not OPENROUTER_API_KEY:
+        logger.error("API key not set for extraction")
+        return {"extracted": {}, "stored": {}, "skipped": []}
+
+    # Skip si messages trop courts
+    if len(user_message) < 10 and len(luna_response) < 30:
+        return {"extracted": {}, "stored": {}, "skipped": ["messages_too_short"]}
+
+    # Formater l'historique
+    history_text = "\n".join([
+        f"USER: {m.get('content', '')[:100]}" if m.get('role') == 'user'
+        else f"LUNA: {m.get('content', '')[:100]}"
+        for m in history[-5:]
+    ]) or "(pas d'historique)"
+
+    # Appel LLM unifié
+    prompt = UNIFIED_EXTRACTION_PROMPT.format(
+        user_message=user_message[:500],
+        luna_response=luna_response[:500],
+        history=history_text
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": HAIKU_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 600,
+                    "temperature": 0,
+                }
+            )
+
+            data = response.json()
+
+            if "choices" not in data:
+                logger.warning(f"OpenRouter error: {data.get('error', data)}")
+                return {"extracted": {}, "stored": {}, "skipped": []}
+
+            content = data["choices"][0]["message"]["content"]
+            extracted = _safe_parse_json(content)
+
+            if not extracted:
+                logger.warning(f"No JSON found in extraction: {content[:100]}")
+                return {"extracted": {}, "stored": {}, "skipped": []}
+
+    except Exception as e:
+        logger.error(f"Extraction error: {e}")
+        return {"extracted": {}, "stored": {}, "skipped": []}
+
+    # Process and store each extracted item
+    stored = {}
+    skipped = []
+
+    # Get current user for dedup
+    current_user = await get_user_by_id(user_id)
+    if not current_user:
+        return {"extracted": extracted, "stored": {}, "skipped": ["user_not_found"]}
+
+    # --- USER FACT ---
+    user_fact = extracted.get("user_fact", {})
+    if user_fact.get("value") and user_fact.get("importance", 0) >= min_importance:
+        fact_stored = await _store_user_fact(user_id, user_fact, current_user)
+        if fact_stored:
+            stored["user_fact"] = fact_stored
+        else:
+            skipped.append(f"user_fact: duplicate or invalid")
+
+    # --- LUNA STATEMENT ---
+    luna_stmt = extracted.get("luna_statement", {})
+    if luna_stmt.get("revealed") and luna_stmt.get("importance", 0) >= min_importance:
+        stmt_stored = await _store_luna_statement(user_id, luna_stmt)
+        if stmt_stored:
+            stored["luna_statement"] = stmt_stored
+        else:
+            skipped.append(f"luna_statement: duplicate")
+
+    # --- EMOTIONAL EVENT ---
+    event = extracted.get("emotional_event", {})
+    if event.get("summary") and event.get("importance", 0) >= min_importance:
+        event_stored = await _store_emotional_event(user_id, event)
+        if event_stored:
+            stored["emotional_event"] = event_stored
+        else:
+            skipped.append(f"emotional_event: duplicate or contradiction")
+
+    # --- INSIDE JOKE ---
+    joke = extracted.get("inside_joke", {})
+    if joke.get("trigger") and joke.get("importance", 0) >= min_importance:
+        joke_stored = await _store_inside_joke(user_id, joke)
+        if joke_stored:
+            stored["inside_joke"] = joke_stored
+
+    # --- CALENDAR DATE ---
+    cal_date = extracted.get("calendar_date", {})
+    if cal_date.get("date") and cal_date.get("importance", 0) >= min_importance:
+        date_stored = await _store_calendar_date(user_id, cal_date)
+        if date_stored:
+            stored["calendar_date"] = date_stored
+
+    # --- USER PATTERN ---
+    pattern = extracted.get("user_pattern", {})
+    if pattern.get("pattern_type") and pattern.get("value"):
+        await _update_user_pattern(user_id, pattern)
+        stored["user_pattern"] = pattern
+
+    if stored:
+        logger.info(f"Unified extraction stored: {list(stored.keys())}")
+
+    return {
+        "extracted": extracted,
+        "stored": stored,
+        "skipped": skipped
+    }
+
+
+# =============================================================================
+# STORAGE HELPERS
+# =============================================================================
+
+async def _store_user_fact(user_id: UUID, fact: dict, current_user: dict) -> Optional[dict]:
+    """Store a user fact after dedup."""
+    fact_type = fact.get("type")
+    value = fact.get("value")
+
+    if not fact_type or not value:
+        return None
+
+    updates = {}
+
+    # Simple fields
+    if fact_type in ["name", "age", "job", "location"]:
+        if value != current_user.get(fact_type):
+            updates[fact_type] = value
+        else:
+            return None  # Duplicate
+
+    # List fields
+    elif fact_type in ["like", "dislike", "secret"]:
+        field = f"{fact_type}s"  # like -> likes
+        existing = current_user.get(field, []) or []
+        existing_lower = [str(v).lower() for v in existing]
+
+        if str(value).lower() not in existing_lower:
+            updates[field] = [value]  # Append mode in update_user
+        else:
+            return None  # Duplicate
+
+    # Family dict
+    elif fact_type == "family":
+        existing_family = current_user.get("family", {}) or {}
+        # Value should be "relation: member" format
+        if ":" in str(value):
+            relation, member = str(value).split(":", 1)
+            if relation.strip() not in existing_family:
+                updates["family"] = {relation.strip(): member.strip()}
+            else:
+                return None  # Duplicate
+
+    if updates:
+        await update_user(user_id, updates)
+        return {"type": fact_type, "value": value, "importance": fact.get("importance", 5)}
+
+    return None
+
+
+async def _store_luna_statement(user_id: UUID, stmt: dict) -> Optional[dict]:
+    """Store a Luna revelation after dedup."""
+    revealed = stmt.get("revealed")
+    keywords = _extract_keywords(revealed)
+
+    # Check for duplicates
+    existing = await find_similar_event(user_id, keywords, "luna_said")
+    if existing:
+        return None
+
+    importance = stmt.get("importance", 7)
+    await add_event(
+        user_id=user_id,
+        event_type="luna_said",
+        summary=revealed,
+        keywords=keywords,
+        score=importance
+    )
+
+    return {"revealed": revealed, "topic": stmt.get("topic"), "importance": importance}
+
+
+async def _store_emotional_event(user_id: UUID, event: dict) -> Optional[dict]:
+    """Store an emotional event after contradiction check."""
+    summary = event.get("summary")
+    event_type = event.get("type", "moment")
+    keywords = _extract_keywords(summary)
+
+    # Check contradiction
+    contradiction = await check_user_contradiction(user_id, summary, keywords)
+
+    if contradiction["action"] == "store":
+        importance = event.get("importance", 7)
+        await add_event(
+            user_id=user_id,
+            event_type=event_type,
+            summary=summary,
+            keywords=keywords,
+            score=importance
+        )
+        return {"summary": summary, "type": event_type, "importance": importance}
+
+    elif contradiction["action"] == "update":
+        return {"summary": summary, "type": event_type, "updated": True}
+
+    return None
+
+
+async def _store_inside_joke(user_id: UUID, joke: dict) -> Optional[dict]:
+    """Store an inside joke using V2 format."""
+    trigger = joke.get("trigger")
+    context = joke.get("context", "")
+    importance = joke.get("importance", 5)
+
+    await add_inside_joke_v2(
+        user_id=user_id,
+        trigger=trigger,
+        context=context,
+        importance=importance
+    )
+
+    return {"trigger": trigger, "context": context, "importance": importance}
+
+
+async def _store_calendar_date(user_id: UUID, cal_date: dict) -> Optional[dict]:
+    """Store a calendar date."""
+    date_str = cal_date.get("date")
+    event_desc = cal_date.get("event")
+    event_type = cal_date.get("type", "plan")
+    importance = cal_date.get("importance", 5)
+
+    # Validate date format
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        logger.warning(f"Invalid date format: {date_str}")
+        return None
+
+    await add_calendar_date(
+        user_id=user_id,
+        date=date_str,
+        event=event_desc,
+        date_type=event_type,
+        importance=importance
+    )
+
+    return {"date": date_str, "event": event_desc, "type": event_type, "importance": importance}
+
+
+async def _update_user_pattern(user_id: UUID, pattern: dict) -> None:
+    """Update user pattern detection."""
+    pattern_type = pattern.get("pattern_type")
+    value = pattern.get("value")
+
+    if pattern_type == "active_hours":
+        # Value should be like "20-23" or "21"
+        try:
+            if "-" in str(value):
+                start, end = map(int, str(value).split("-"))
+                hours = list(range(start, end + 1))
+            else:
+                hours = [int(value)]
+            await update_user_patterns(user_id, {"active_hours": hours})
+        except ValueError:
+            pass
+
+    elif pattern_type == "mood_trigger":
+        await update_user_patterns(user_id, {"mood_triggers": [value]})
+
+    elif pattern_type == "communication_style":
+        await update_user_patterns(user_id, {"communication_style": value})
+
+
+# =============================================================================
+# LEGACY COMPATIBILITY WRAPPERS
+# =============================================================================
+
+async def extract_user_facts(
+    user_id: UUID,
+    message: str,
+    history: list[dict]
+) -> dict:
+    """
+    Legacy wrapper - calls unified extraction.
+    Kept for backward compatibility with luna_simple.py.
+    """
+    # We need a luna_response, but for legacy calls we don't have it
+    # Just extract from user message only
+    return await extract_unified(
+        user_id=user_id,
+        user_message=message,
+        luna_response="",
+        history=history
+    )
+
+
+async def extract_luna_said(
+    user_id: UUID,
+    luna_response: str,
+    user_message: str
+) -> Optional[dict]:
+    """
+    Legacy wrapper - calls unified extraction.
+    Kept for backward compatibility with luna_simple.py.
+    """
+    result = await extract_unified(
+        user_id=user_id,
+        user_message=user_message,
+        luna_response=luna_response,
+        history=[]
+    )
+
+    # Return in legacy format
+    if "luna_statement" in result.get("stored", {}):
+        stmt = result["stored"]["luna_statement"]
+        return {
+            "revealed": stmt.get("revealed"),
+            "topic": stmt.get("topic"),
+            "keywords": _extract_keywords(stmt.get("revealed", ""))
+        }
+    return None
 
 
 # =============================================================================
@@ -417,46 +556,55 @@ async def extract_from_history(
 ) -> dict:
     """
     Extrait les faits d'un historique de messages.
-    Utile pour initialiser la mémoire d'un user existant.
+    Utilise l'extraction unifiée pour chaque paire user/assistant.
 
     Returns:
         {
             "total_processed": int,
             "facts_found": int,
-            "moments_found": int,
-            "luna_said_found": int
+            "events_found": int,
+            "jokes_found": int
         }
     """
     stats = {
         "total_processed": 0,
         "facts_found": 0,
-        "moments_found": 0,
-        "luna_said_found": 0
+        "events_found": 0,
+        "jokes_found": 0
     }
 
-    for i in range(0, len(messages), batch_size):
-        batch = messages[i:i + batch_size]
+    i = 0
+    while i < len(messages):
+        user_msg = ""
+        luna_msg = ""
 
-        for j, msg in enumerate(batch):
-            if msg.get("role") == "user":
-                # Extraire les faits user
-                history = batch[:j]
-                result = await extract_user_facts(user_id, msg["content"], history)
+        # Get user message
+        if messages[i].get("role") == "user":
+            user_msg = messages[i]["content"]
+            i += 1
 
-                if result["stored"]:
-                    stats["facts_found"] += len(result["stored"])
-                if "moment" in result.get("stored", {}):
-                    stats["moments_found"] += 1
+        # Get following Luna response
+        if i < len(messages) and messages[i].get("role") == "assistant":
+            luna_msg = messages[i]["content"]
+            i += 1
 
-            elif msg.get("role") == "assistant":
-                # Extraire ce que Luna a dit
-                prev_user_msg = ""
-                if j > 0 and batch[j-1].get("role") == "user":
-                    prev_user_msg = batch[j-1]["content"]
+        # Extract from pair
+        if user_msg or luna_msg:
+            history = messages[max(0, i-6):i-2]  # Previous context
+            result = await extract_unified(
+                user_id=user_id,
+                user_message=user_msg,
+                luna_response=luna_msg,
+                history=history
+            )
 
-                luna_said = await extract_luna_said(user_id, msg["content"], prev_user_msg)
-                if luna_said:
-                    stats["luna_said_found"] += 1
+            stored = result.get("stored", {})
+            if "user_fact" in stored:
+                stats["facts_found"] += 1
+            if "emotional_event" in stored or "luna_statement" in stored:
+                stats["events_found"] += 1
+            if "inside_joke" in stored:
+                stats["jokes_found"] += 1
 
             stats["total_processed"] += 1
 
