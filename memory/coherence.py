@@ -199,6 +199,21 @@ async def resolve_contradiction(event_id: UUID, resolution: str) -> None:
             """, event_id)
 
 
+def _safe_parse_list(value) -> list:
+    """Parse une valeur qui peut être une string JSON ou une liste."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, list) else []
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return []
+
+
 def build_memory_reminder(user: dict, relationship: dict) -> str:
     """
     Construit un rappel mémoire à injecter dans le prompt.
@@ -217,21 +232,34 @@ def build_memory_reminder(user: dict, relationship: dict) -> str:
     if user.get("location"):
         parts.append(f"Il habite à {user['location']}")
 
-    # Likes (max 3)
-    likes = user.get("likes", [])
+    # Likes (max 3) - parse JSON if needed
+    likes = _safe_parse_list(user.get("likes"))
     if likes:
-        parts.append(f"Il aime: {', '.join(likes[:3])}")
+        # Filter only string likes
+        likes_str = [str(l) for l in likes if l and isinstance(l, str)][:3]
+        if likes_str:
+            parts.append(f"Il aime: {', '.join(likes_str)}")
 
     # Secrets (si intimacy >= 5)
     if relationship.get("intimacy", 0) >= 5:
-        secrets = user.get("secrets", [])
+        secrets = _safe_parse_list(user.get("secrets"))
         if secrets:
-            parts.append(f"Secrets partagés: {', '.join(secrets[:2])}")
+            secrets_str = [str(s) for s in secrets if s and isinstance(s, str)][:2]
+            if secrets_str:
+                parts.append(f"Secrets partagés: {', '.join(secrets_str)}")
 
-    # Inside jokes
-    jokes = relationship.get("inside_jokes", [])
+    # Inside jokes - parse JSON if needed
+    jokes = _safe_parse_list(relationship.get("inside_jokes"))
     if jokes:
-        parts.append(f"Vos inside jokes: {', '.join(jokes[:2])}")
+        # Jokes can be strings or dicts with 'trigger' key
+        jokes_display = []
+        for j in jokes[:2]:
+            if isinstance(j, str):
+                jokes_display.append(j)
+            elif isinstance(j, dict) and j.get("trigger"):
+                jokes_display.append(j["trigger"])
+        if jokes_display:
+            parts.append(f"Vos inside jokes: {', '.join(jokes_display)}")
 
     if not parts:
         return ""
