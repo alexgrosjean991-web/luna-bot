@@ -634,7 +634,10 @@ async def get_luna_life(user_id: UUID) -> dict:
         """, user_id)
 
         if row and row["luna_current_life"]:
-            return row["luna_current_life"]
+            life = row["luna_current_life"]
+            if isinstance(life, str):
+                return json.loads(life)
+            return life
         return {}
 
 
@@ -665,7 +668,10 @@ async def get_user_patterns(user_id: UUID) -> dict:
         """, user_id)
 
         if row and row["user_patterns"]:
-            return row["user_patterns"]
+            patterns = row["user_patterns"]
+            if isinstance(patterns, str):
+                return json.loads(patterns)
+            return patterns
         return {}
 
 
