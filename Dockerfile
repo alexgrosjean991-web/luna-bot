@@ -9,6 +9,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application
 COPY . .
 
-# Run bot
-# Use luna_simple.py for now (original), or bot.main for new architecture
-CMD ["python", "luna_simple.py"]
+# Run bot (new modular architecture)
+CMD ["python", "-m", "bot.main"]
