@@ -52,13 +52,33 @@ def set_api_key(key: str):
 
 UNIFIED_EXTRACTION_PROMPT = """Tu extrais les informations mémorables de cette conversation.
 
-⚠️ DÉTAILS DE LUNA (LE BOT) À NE PAS CONFONDRE:
-- Luna, 24 ans, graphiste freelance, Paris
-- Pixel (son chat roux)
+⚠️⚠️⚠️ RÈGLE CRITIQUE - LUNA vs UTILISATEUR ⚠️⚠️⚠️
+
+LUNA (le bot) a ces caractéristiques FIXES - NE JAMAIS LES EXTRAIRE COMME user_fact:
+- Luna, 23 ans, UI/UX designer freelance, Paris 11ème
+- Pixel (son chat tigré roux)
 - Café Oberkampf, appartement Paris
 - Parents divorcés, père distant
-- Ex Théo, anxiété, insomnies
-→ Quand Luna parle de ça, c'est luna_statement, PAS user_fact!
+- Ex toxique (gamer), anxiété, insomnies
+- Gym le matin, gaming le soir (Valorant, LoL)
+
+EXEMPLES CONCRETS:
+
+❌ FAUX - Luna dit "je suis graphiste":
+  user_fact: {{"type": "job", "value": "graphiste"}}  ← ERREUR! C'est le job de LUNA
+
+✅ CORRECT - Luna dit "je suis graphiste":
+  luna_statement: {{"revealed": "je suis graphiste", "topic": "travail"}}
+
+❌ FAUX - Luna dit "j'ai un chat qui s'appelle Pixel":
+  user_fact: {{"type": "like", "value": "chats"}}  ← ERREUR! C'est le chat de LUNA
+
+✅ CORRECT - User dit "je m'appelle Lucas, je suis dev à Lyon":
+  user_fact: {{"type": "name", "value": "Lucas", "importance": 8}}
+  (puis un 2e appel pour job et location, ou tu peux prioriser le plus important)
+
+✅ CORRECT - User dit "j'adore le gaming":
+  user_fact: {{"type": "like", "value": "gaming", "importance": 6}}
 
 MESSAGE UTILISATEUR:
 {user_message}
@@ -73,11 +93,11 @@ JSON strict - retourne UNIQUEMENT ce qui est NOUVEAU et SIGNIFICATIF:
 {{
     "user_fact": {{
         "type": "name|age|job|location|like|dislike|secret|family|null",
-        "value": "la valeur extraite ou null",
+        "value": "info sur L'UTILISATEUR uniquement, ou null",
         "importance": 1-10
     }},
     "luna_statement": {{
-        "revealed": "révélation personnelle de Luna ou null",
+        "revealed": "révélation personnelle de LUNA ou null",
         "topic": "famille|ex|peur|travail|secret|null",
         "importance": 1-10
     }},
@@ -105,23 +125,21 @@ JSON strict - retourne UNIQUEMENT ce qui est NOUVEAU et SIGNIFICATIF:
 
 RÈGLES D'IMPORTANCE:
 - 9-10: Premier "je t'aime", conflit majeur, secret profond
-- 7-8: Révélation personnelle, promesse, moment fort
-- 5-6: Info utile, préférence importante
+- 7-8: Prénom de l'utilisateur, révélation personnelle, promesse
+- 5-6: Job, location, préférence importante
 - 3-4: Détail mineur mais mémorable
 - 1-2: Trivial, à ignorer
 
 ❌ Retourne null/1 pour:
+- Infos sur LUNA (graphiste, Pixel, Paris, ex, etc.)
 - Réactions banales ("mdr", "ok", "cool")
-- Questions sans révélation
 - Répétitions d'infos déjà connues
-- Phrases génériques
 
-✅ Retourne des valeurs pour:
-- Nouvelles infos factuelles (prénom, métier, etc.)
-- Révélations émotionnelles
-- Moments partagés uniques
-- Promesses ou plans futurs
-- Blagues récurrentes
+✅ Retourne des valeurs pour user_fact UNIQUEMENT si L'UTILISATEUR parle de LUI-MÊME:
+- "je m'appelle X" → name
+- "je bosse comme X" / "je suis X (métier)" → job
+- "j'habite à X" → location
+- "j'aime X" / "je kiffe X" → like
 """
 
 
@@ -256,11 +274,18 @@ async def extract_unified(
                 return {"extracted": {}, "stored": {}, "skipped": []}
 
             content = data["choices"][0]["message"]["content"]
+
+            # Log raw JSON for debugging
+            logger.info(f"Extraction raw response: {content[:500]}")
+
             extracted = _safe_parse_json(content)
 
             if not extracted:
                 logger.warning(f"No JSON found in extraction: {content[:100]}")
                 return {"extracted": {}, "stored": {}, "skipped": []}
+
+            # Log parsed extraction
+            logger.info(f"Extraction parsed: {json.dumps(extracted, ensure_ascii=False)[:300]}")
 
     except Exception as e:
         logger.error(f"Extraction error: {e}")
@@ -276,7 +301,7 @@ async def extract_unified(
         return {"extracted": extracted, "stored": {}, "skipped": ["user_not_found"]}
 
     # --- USER FACT ---
-    user_fact = extracted.get("user_fact", {})
+    user_fact = extracted.get("user_fact") or {}
     if user_fact.get("value") and user_fact.get("importance", 0) >= min_importance:
         fact_stored = await _store_user_fact(user_id, user_fact, current_user)
         if fact_stored:
@@ -285,7 +310,7 @@ async def extract_unified(
             skipped.append(f"user_fact: duplicate or invalid")
 
     # --- LUNA STATEMENT ---
-    luna_stmt = extracted.get("luna_statement", {})
+    luna_stmt = extracted.get("luna_statement") or {}
     if luna_stmt.get("revealed") and luna_stmt.get("importance", 0) >= min_importance:
         stmt_stored = await _store_luna_statement(user_id, luna_stmt)
         if stmt_stored:
@@ -294,7 +319,7 @@ async def extract_unified(
             skipped.append(f"luna_statement: duplicate")
 
     # --- EMOTIONAL EVENT ---
-    event = extracted.get("emotional_event", {})
+    event = extracted.get("emotional_event") or {}
     if event.get("summary") and event.get("importance", 0) >= min_importance:
         event_stored = await _store_emotional_event(user_id, event)
         if event_stored:
@@ -303,21 +328,21 @@ async def extract_unified(
             skipped.append(f"emotional_event: duplicate or contradiction")
 
     # --- INSIDE JOKE ---
-    joke = extracted.get("inside_joke", {})
+    joke = extracted.get("inside_joke") or {}
     if joke.get("trigger") and joke.get("importance", 0) >= min_importance:
         joke_stored = await _store_inside_joke(user_id, joke)
         if joke_stored:
             stored["inside_joke"] = joke_stored
 
     # --- CALENDAR DATE ---
-    cal_date = extracted.get("calendar_date", {})
+    cal_date = extracted.get("calendar_date") or {}
     if cal_date.get("date") and cal_date.get("importance", 0) >= min_importance:
         date_stored = await _store_calendar_date(user_id, cal_date)
         if date_stored:
             stored["calendar_date"] = date_stored
 
     # --- USER PATTERN ---
-    pattern = extracted.get("user_pattern", {})
+    pattern = extracted.get("user_pattern") or {}
     if pattern.get("pattern_type") and pattern.get("value"):
         await _update_user_pattern(user_id, pattern)
         stored["user_pattern"] = pattern
@@ -464,7 +489,7 @@ async def _store_calendar_date(user_id: UUID, cal_date: dict) -> Optional[dict]:
         user_id=user_id,
         date=date_str,
         event=event_desc,
-        date_type=event_type,
+        event_type=event_type,
         importance=importance
     )
 
