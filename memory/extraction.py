@@ -80,12 +80,21 @@ EXEMPLES CONCRETS:
 ✅ CORRECT - User dit "j'adore le gaming":
   user_fact: {{"type": "like", "value": "gaming", "importance": 6}}
 
-⚠️ ATTENTION FAMILLE/AMIS - NE PAS CONFONDRE:
-- "Je m'appelle Lucas" → user_fact: {{"type": "name", "value": "Lucas"}} ✅
-- "Mon frère s'appelle Pierre" → user_fact: {{"type": "family", "value": "frère: Pierre"}} ✅
-- "Mon pote Alex" → user_fact: {{"type": "family", "value": "ami: Alex"}} ✅
-- JAMAIS mettre le nom d'un proche dans "type": "name"!
-- Le "name" c'est UNIQUEMENT le prénom de L'UTILISATEUR lui-même
+⛔⛔⛔ RÈGLE ABSOLUE - NOM DE L'UTILISATEUR vs NOMS DE PROCHES ⛔⛔⛔
+
+"type": "name" = UNIQUEMENT le prénom de l'utilisateur LUI-MÊME (importance 8+)
+"type": "family" = prénoms de sa famille/amis (importance 6)
+
+EXEMPLES CONCRETS:
+- "Je m'appelle Lucas" → {{"type": "name", "value": "Lucas", "importance": 8}} ✅
+- "Moi c'est Mika" → {{"type": "name", "value": "Mika", "importance": 8}} ✅
+- "Mon frère s'appelle Pierre" → {{"type": "family", "value": "frère: Pierre", "importance": 6}} ✅
+- "Ma sœur Luana" → {{"type": "family", "value": "sœur: Luana", "importance": 6}} ✅
+- "Mon pote Alex" → {{"type": "family", "value": "ami: Alex", "importance": 6}} ✅
+
+⛔ ERREUR GRAVE: mettre un nom de proche dans "type": "name"
+⛔ "Mon frère Patrick" → {{"type": "name", "value": "Patrick"}} ← FAUX!
+✅ "Mon frère Patrick" → {{"type": "family", "value": "frère: Patrick"}} ← CORRECT!
 
 MESSAGE UTILISATEUR:
 {user_message}
@@ -461,7 +470,13 @@ async def _store_user_fact(user_id: UUID, fact: dict, current_user: dict) -> Opt
 
     # Simple fields
     if fact_type in ["name", "age", "job", "location"]:
-        if value != current_user.get(fact_type):
+        current_value = current_user.get(fact_type)
+        if value != current_value:
+            # Pour "name": ne PAS écraser si un nom existe et importance < 8
+            # (importance 6 = nom de famille/ami, importance 8+ = prénom du user)
+            if fact_type == "name" and current_value and fact.get("importance", 5) < 8:
+                logger.info(f"Skipping name override: '{value}' (importance {fact.get('importance')}) won't replace '{current_value}'")
+                return None
             updates[fact_type] = value
         else:
             return None  # Duplicate
