@@ -484,15 +484,15 @@ async def _update_user_pattern(user_id: UUID, pattern: dict) -> None:
                 hours = list(range(start, end + 1))
             else:
                 hours = [int(value)]
-            await update_user_patterns(user_id, {"active_hours": hours})
+            await update_user_patterns(user_id, "active_hours", hours)
         except ValueError:
             pass
 
     elif pattern_type == "mood_trigger":
-        await update_user_patterns(user_id, {"mood_triggers": [value]})
+        await update_user_patterns(user_id, "mood_triggers", [value])
 
     elif pattern_type == "communication_style":
-        await update_user_patterns(user_id, {"communication_style": value})
+        await update_user_patterns(user_id, "communication_style", value)
 
 
 # =============================================================================
