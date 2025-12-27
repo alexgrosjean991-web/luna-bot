@@ -470,12 +470,20 @@ async def _store_user_fact(user_id: UUID, fact: dict, current_user: dict) -> Opt
 
     # Simple fields
     if fact_type in ["name", "age", "job", "location"]:
+        # Convertir age en int si c'est une string
+        if fact_type == "age":
+            try:
+                value = int(value)
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid age value: {value}")
+                return None
+
         current_value = current_user.get(fact_type)
         if value != current_value:
-            # Pour "name": ne PAS écraser si un nom existe et importance < 8
-            # (importance 6 = nom de famille/ami, importance 8+ = prénom du user)
-            if fact_type == "name" and current_value and fact.get("importance", 5) < 8:
-                logger.info(f"Skipping name override: '{value}' (importance {fact.get('importance')}) won't replace '{current_value}'")
+            # Pour "name" et "age": ne PAS écraser si une valeur existe et importance < 8
+            # (importance 6 = famille/ami, importance 8+ = info du user lui-même)
+            if fact_type in ["name", "age"] and current_value and fact.get("importance", 5) < 8:
+                logger.info(f"Skipping {fact_type} override: '{value}' (importance {fact.get('importance')}) won't replace '{current_value}'")
                 return None
             updates[fact_type] = value
         else:
