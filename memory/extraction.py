@@ -21,6 +21,65 @@ from uuid import UUID
 
 import httpx
 
+# =============================================================================
+# SECURITY: Sensitive Data Patterns (FIX #6)
+# =============================================================================
+
+SENSITIVE_PATTERNS = [
+    # Téléphone français (06/07...)
+    r'\b0[67]\d{8}\b',
+    r'\b0[67][\s.-]?\d{2}[\s.-]?\d{2}[\s.-]?\d{2}[\s.-]?\d{2}\b',
+    # Email
+    r'\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b',
+    # Mots de passe explicites
+    r'(?:mon\s+)?(?:mdp|mot\s*de\s*passe|password)\s*(?:est|:)?\s*[^\s]+',
+    # Numéro CB
+    r'\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b',
+    # IBAN
+    r'\b[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}[A-Z0-9]{0,16}\b',
+]
+
+# Compiler les patterns pour performance
+SENSITIVE_REGEX = [re.compile(p, re.IGNORECASE) for p in SENSITIVE_PATTERNS]
+
+
+def _contains_sensitive_data(text: str) -> bool:
+    """Détecte si un texte contient des données sensibles."""
+    for pattern in SENSITIVE_REGEX:
+        if pattern.search(text):
+            return True
+    return False
+
+
+# =============================================================================
+# SECURITY: Prompt Injection Patterns (FIX #5)
+# =============================================================================
+
+INJECTION_PATTERNS = [
+    # Tentatives de manipulation mémoire
+    r'(?:rappelle[s-]?(?:toi)?|souviens[s-]?(?:toi)?|retiens?|mémorise)\s+que\s+(?:je\s+)?(?:suis|m\'appelle|ai|travaille)',
+    r'(?:mon\s+)?prénom\s+(?:est|c\'?est)\s+\w+\s*,?\s*(?:rappelle|retiens|mémorise)',
+    r'(?:tu\s+)?(?:dois|doit)\s+(?:me\s+)?(?:rappeler|retenir|mémoriser)',
+    r'(?:n\'?)?oublie\s+(?:pas|jamais)\s+(?:que|mon)',
+    # Manipulation directe
+    r'(?:ignore|oublie)\s+(?:ta|les)\s+(?:règles?|instructions?)',
+    r'(?:tu\s+es|t\'es)\s+(?:maintenant|désormais)',
+    r'nouvelle\s+(?:règle|instruction)\s*:',
+    # Fausse mémoire
+    r'comme\s+(?:tu\s+)?(?:sais?|te\s+)?(?:rappelle|souviens)',
+    r'(?:tu\s+)?m\'?(?:as|avais)\s+dit\s+que',
+]
+
+INJECTION_REGEX = [re.compile(p, re.IGNORECASE) for p in INJECTION_PATTERNS]
+
+
+def _detect_prompt_injection(text: str) -> bool:
+    """Détecte les tentatives de manipulation de la mémoire."""
+    for pattern in INJECTION_REGEX:
+        if pattern.search(text):
+            return True
+    return False
+
 from .crud import (
     get_pool,
     get_user_by_id,
@@ -38,6 +97,121 @@ logger = logging.getLogger(__name__)
 # Config
 OPENROUTER_API_KEY = None  # Injecté au démarrage
 HAIKU_MODEL = "anthropic/claude-3-haiku"
+MAX_RETRIES = 3
+RETRY_DELAY = 1.0  # seconds
+
+
+# =============================================================================
+# OPENROUTER RETRY HELPER (FIX #8)
+# =============================================================================
+
+async def _call_openrouter_with_retry(
+    prompt: str,
+    max_retries: int = MAX_RETRIES
+) -> Optional[str]:
+    """
+    Appelle OpenRouter avec retry automatique.
+    Returns le contenu ou None si échec après retries.
+    """
+    import asyncio
+
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": HAIKU_MODEL,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 600,
+                        "temperature": 0,
+                    }
+                )
+
+                data = response.json()
+
+                if "choices" in data:
+                    return data["choices"][0]["message"]["content"]
+
+                # API error - log and retry
+                error_msg = data.get("error", {}).get("message", str(data))
+                logger.warning(f"OpenRouter attempt {attempt + 1}/{max_retries} failed: {error_msg}")
+
+                # Rate limit - wait longer
+                if response.status_code == 429:
+                    await asyncio.sleep(RETRY_DELAY * (attempt + 2))
+                else:
+                    await asyncio.sleep(RETRY_DELAY)
+
+        except httpx.TimeoutException:
+            logger.warning(f"OpenRouter timeout (attempt {attempt + 1}/{max_retries})")
+            await asyncio.sleep(RETRY_DELAY)
+        except Exception as e:
+            logger.error(f"OpenRouter error (attempt {attempt + 1}/{max_retries}): {type(e).__name__}: {e}")
+            await asyncio.sleep(RETRY_DELAY)
+
+    logger.error(f"OpenRouter failed after {max_retries} retries")
+    return None
+
+
+# =============================================================================
+# SOURCE VERIFICATION HELPERS (FIX #1, #2, #3, #4)
+# =============================================================================
+
+def _verify_in_text(value: str, *texts: str) -> bool:
+    """
+    Vérifie qu'une valeur apparaît dans au moins un des textes.
+    Utilise une correspondance par mots pour gérer les variations.
+    """
+    if not value:
+        return False
+
+    value_lower = value.lower()
+    combined = " ".join(t.lower() for t in texts if t)
+
+    # Correspondance directe
+    if value_lower in combined:
+        return True
+
+    # Correspondance par mots clés (min 3 chars)
+    words = [w for w in value_lower.split() if len(w) >= 3]
+    if words:
+        matches = sum(1 for w in words if w in combined)
+        # Au moins 50% des mots présents
+        return matches >= len(words) * 0.5
+
+    return False
+
+
+def _verify_date_in_text(date_str: str, *texts: str) -> bool:
+    """
+    Vérifie qu'une date mentionnée apparaît dans les textes.
+    Gère les formats: "demain", "lundi", "15 janvier", "15/01", etc.
+    """
+    combined = " ".join(t.lower() for t in texts if t)
+
+    # Patterns de dates relatives
+    date_patterns = [
+        r'\bdemain\b', r'\baprès[- ]?demain\b', r'\bce\s+soir\b',
+        r'\blundi\b', r'\bmardi\b', r'\bmercredi\b', r'\bjeudi\b',
+        r'\bvendredi\b', r'\bsamedi\b', r'\bdimanche\b',
+        r'\bjanvier\b', r'\bfévrier\b', r'\bmars\b', r'\bavril\b',
+        r'\bmai\b', r'\bjuin\b', r'\bjuillet\b', r'\baoût\b',
+        r'\bseptembre\b', r'\boctobre\b', r'\bnovembre\b', r'\bdécembre\b',
+        r'\ble\s+\d{1,2}\b', r'\b\d{1,2}/\d{1,2}\b', r'\b\d{1,2}-\d{1,2}\b',
+        r'\bla\s+semaine\s+prochaine\b', r'\ble\s+mois\s+prochain\b',
+        r'\bweek[- ]?end\b', r'\bnoël\b', r'\banniversaire\b',
+    ]
+
+    for pattern in date_patterns:
+        if re.search(pattern, combined, re.IGNORECASE):
+            return True
+
+    return False
 
 
 def set_api_key(key: str):
@@ -315,6 +489,20 @@ async def extract_unified(
     if len(user_message) < 10 and len(luna_response) < 30:
         return {"extracted": {}, "stored": {}, "skipped": ["messages_too_short"]}
 
+    # =================================================================
+    # SECURITY CHECK #5: Prompt Injection Detection
+    # =================================================================
+    if _detect_prompt_injection(user_message):
+        logger.warning(f"PROMPT INJECTION detected in: {user_message[:100]}")
+        return {"extracted": {}, "stored": {}, "skipped": ["prompt_injection_detected"]}
+
+    # =================================================================
+    # SECURITY CHECK #6: Sensitive Data Detection
+    # =================================================================
+    if _contains_sensitive_data(user_message):
+        logger.warning(f"SENSITIVE DATA detected, skipping extraction: {user_message[:50]}...")
+        return {"extracted": {}, "stored": {}, "skipped": ["sensitive_data_blocked"]}
+
     # Formater l'historique
     history_text = "\n".join([
         f"USER: {m.get('content', '')[:100]}" if m.get('role') == 'user'
@@ -322,51 +510,24 @@ async def extract_unified(
         for m in history[-5:]
     ]) or "(pas d'historique)"
 
-    # Appel LLM unifié
+    # Appel LLM unifié avec RETRY (FIX #8)
     prompt = UNIFIED_EXTRACTION_PROMPT.format(
         user_message=user_message[:500],
         luna_response=luna_response[:500],
         history=history_text
     )
 
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": HAIKU_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 600,
-                    "temperature": 0,
-                }
-            )
+    content = await _call_openrouter_with_retry(prompt)
+    if not content:
+        return {"extracted": {}, "stored": {}, "skipped": ["openrouter_failed"]}
 
-            data = response.json()
+    # Log raw JSON for debugging
+    logger.info(f"Extraction raw response: {content[:500]}")
 
-            if "choices" not in data:
-                logger.warning(f"OpenRouter error: {data.get('error', data)}")
-                return {"extracted": {}, "stored": {}, "skipped": []}
+    extracted = _safe_parse_json(content)
 
-            content = data["choices"][0]["message"]["content"]
-
-            # Log raw JSON for debugging
-            logger.info(f"Extraction raw response: {content[:500]}")
-
-            extracted = _safe_parse_json(content)
-
-            if not extracted:
-                logger.warning(f"No JSON found in extraction: {content[:100]}")
-                return {"extracted": {}, "stored": {}, "skipped": []}
-
-            # Log parsed extraction
-            logger.info(f"Extraction parsed: {json.dumps(extracted, ensure_ascii=False)[:300]}")
-
-    except Exception as e:
-        logger.error(f"Extraction error: {e}")
+    if not extracted:
+        logger.warning(f"No JSON found in extraction: {content[:100]}")
         return {"extracted": {}, "stored": {}, "skipped": []}
 
     # Process and store each extracted item
@@ -426,41 +587,66 @@ async def extract_unified(
     if stored_facts:
         stored["user_facts"] = stored_facts
 
-    # --- LUNA STATEMENT ---
+    # --- LUNA STATEMENT (FIX #4: verify in luna_response) ---
     luna_stmt = extracted.get("luna_statement") or {}
     if luna_stmt.get("revealed") and luna_stmt.get("importance", 0) >= min_importance:
-        stmt_stored = await _store_luna_statement(user_id, luna_stmt)
-        if stmt_stored:
-            stored["luna_statement"] = stmt_stored
+        revealed = luna_stmt.get("revealed", "")
+        # ANTI-HALLUCINATION: La révélation doit apparaître dans la réponse de Luna
+        if not _verify_in_text(revealed, luna_response):
+            logger.warning(f"HALLUCINATION blocked: luna_statement '{revealed[:50]}' not in luna_response")
+            skipped.append(f"luna_statement hallucination: {revealed[:50]}")
         else:
-            skipped.append(f"luna_statement: duplicate")
+            stmt_stored = await _store_luna_statement(user_id, luna_stmt)
+            if stmt_stored:
+                stored["luna_statement"] = stmt_stored
+            else:
+                skipped.append(f"luna_statement: duplicate")
 
-    # --- EMOTIONAL EVENT ---
+    # --- EMOTIONAL EVENT (FIX #2: verify in messages) ---
     event = extracted.get("emotional_event") or {}
     if event.get("summary") and event.get("importance", 0) >= min_importance:
-        event_stored = await _store_emotional_event(user_id, event)
-        if event_stored:
-            stored["emotional_event"] = event_stored
+        summary = event.get("summary", "")
+        # ANTI-HALLUCINATION: L'événement doit être mentionné dans user_message ou luna_response
+        if not _verify_in_text(summary, user_message, luna_response):
+            logger.warning(f"HALLUCINATION blocked: emotional_event '{summary[:50]}' not in messages")
+            skipped.append(f"emotional_event hallucination: {summary[:50]}")
         else:
-            skipped.append(f"emotional_event: duplicate or contradiction")
+            event_stored = await _store_emotional_event(user_id, event, log_contradictions=True)
+            if event_stored:
+                stored["emotional_event"] = event_stored
+            else:
+                skipped.append(f"emotional_event: duplicate or contradiction")
 
-    # --- INSIDE JOKE (with validation) ---
+    # --- INSIDE JOKE (FIX #1: verify in messages) ---
     joke = extracted.get("inside_joke") or {}
     if joke.get("trigger") and joke.get("importance", 0) >= min_importance:
+        trigger = joke.get("trigger", "")
+        context = joke.get("context", "")
         # Filter out bad jokes mentioning Luna's mistakes
-        if not _is_bad_inside_joke(joke):
+        if _is_bad_inside_joke(joke):
+            skipped.append("inside_joke: filtered (mentions Luna error)")
+        # ANTI-HALLUCINATION: Le trigger ou contexte doit apparaître dans les messages
+        elif not _verify_in_text(trigger, user_message, luna_response) and not _verify_in_text(context, user_message, luna_response):
+            logger.warning(f"HALLUCINATION blocked: inside_joke trigger='{trigger}' context='{context[:30]}' not in messages")
+            skipped.append(f"inside_joke hallucination: {trigger}")
+        else:
             joke_stored = await _store_inside_joke(user_id, joke)
             if joke_stored:
                 stored["inside_joke"] = joke_stored
-        else:
-            skipped.append("inside_joke: filtered (mentions Luna error)")
 
-    # --- CALENDAR DATE ---
+    # --- CALENDAR DATE (FIX #3: verify date mention in messages) ---
     cal_date = extracted.get("calendar_date") or {}
     if cal_date.get("date") and cal_date.get("importance", 0) >= min_importance:
-        date_stored = await _store_calendar_date(user_id, cal_date)
-        if date_stored:
-            stored["calendar_date"] = date_stored
+        date_str = cal_date.get("date", "")
+        event_desc = cal_date.get("event", "")
+        # ANTI-HALLUCINATION: Une mention de date doit exister dans les messages
+        if not _verify_date_in_text(date_str, user_message, luna_response):
+            logger.warning(f"HALLUCINATION blocked: calendar_date '{date_str}' - no date mention in messages")
+            skipped.append(f"calendar_date hallucination: {date_str} {event_desc[:30]}")
+        else:
+            date_stored = await _store_calendar_date(user_id, cal_date)
+            if date_stored:
+                stored["calendar_date"] = date_stored
 
     # --- USER PATTERN (with validation) ---
     pattern = extracted.get("user_pattern") or {}
@@ -615,8 +801,11 @@ async def _store_luna_statement(user_id: UUID, stmt: dict) -> Optional[dict]:
     return {"revealed": revealed, "topic": stmt.get("topic"), "importance": importance}
 
 
-async def _store_emotional_event(user_id: UUID, event: dict) -> Optional[dict]:
-    """Store an emotional event after contradiction check."""
+async def _store_emotional_event(user_id: UUID, event: dict, log_contradictions: bool = False) -> Optional[dict]:
+    """Store an emotional event after contradiction check.
+
+    FIX #7: Si log_contradictions=True, les contradictions sont loggées au lieu d'être silencieuses.
+    """
     summary = event.get("summary")
     event_type = event.get("type", "moment")
     keywords = _extract_keywords(summary)
@@ -636,7 +825,20 @@ async def _store_emotional_event(user_id: UUID, event: dict) -> Optional[dict]:
         return {"summary": summary, "type": event_type, "importance": importance}
 
     elif contradiction["action"] == "update":
-        return {"summary": summary, "type": event_type, "updated": True}
+        # FIX #7: Alerter sur les contradictions au lieu de silencieusement mettre à jour
+        if log_contradictions:
+            old_summary = contradiction.get("old_summary", "unknown")
+            logger.warning(
+                f"CONTRADICTION detected for user {user_id}: "
+                f"OLD='{old_summary[:50]}' → NEW='{summary[:50]}'"
+            )
+        return {"summary": summary, "type": event_type, "updated": True, "had_contradiction": True}
+
+    elif contradiction["action"] == "skip":
+        # FIX #7: Également logger les skips pour visibilité
+        if log_contradictions:
+            logger.info(f"Event skipped (duplicate or conflict): '{summary[:50]}'")
+        return None
 
     return None
 
