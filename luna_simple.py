@@ -1,12 +1,13 @@
 """
-Luna Bot - Version Simplifiée avec Memory System V1
+Luna Bot - LLM-First Architecture
+
+Philosophy: "Luna est libre, le code pose les rails."
 
 Features:
-- Mémoire persistante (users, relationships, timeline)
-- Anti-contradiction et cohérence
-- Onboarding 5 jours avec nudges
-- NSFW routing (Haiku SFW / Magnum NSFW)
-- Messages proactifs (2x/jour max)
+- Phase system: HOOK → CONNECT → ATTACH → TENSION → PAYWALL → LIBRE
+- Memory system (extraction + retrieval)
+- NSFW routing (Haiku SFW / Magnum NSFW for LIBRE phase)
+- Proactive messages (2x/day max)
 """
 
 import asyncio
@@ -36,34 +37,23 @@ from memory import (
     extract_user_facts,
     extract_luna_said,
     build_prompt_context,
-    get_quick_context,
-    get_onboarding_nudge,
     update_tiers,
-)
-
-# Config imports
-from config import (
-    LUNA_IDENTITY,
-    LUNA_ABSOLUTE_RULES,
-    PROACTIVE_CONFIG,
-    get_nsfw_tier,
-    build_system_prompt,
-    LUNA_POST_PAYWALL_PROMPT,
-    NSFW_REQUEST_KEYWORDS,
-    CLIMAX_INDICATORS,
 )
 
 # NSFW Gate (post-paywall)
 from services.nsfw_gate import NSFWGate
 
-# Progression system
-from services.progression import (
-    get_progression_state,
-    check_and_progress,
-    force_progress,
-    detect_intimacy_action,
-    update_intimacy,
+# Phase system
+from services.phases import (
+    Phase,
+    get_current_phase,
+    get_phase_progress,
+    get_paywall_message,
+    maybe_increment_day,
 )
+
+# Prompt builder
+from prompts.luna import build_system_prompt
 
 load_dotenv()
 
@@ -97,18 +87,18 @@ BUFFER_DELAY = 3.5  # secondes avant de répondre (laisse l'user finir)
 message_buffers: dict[int, list[str]] = {}  # telegram_id -> [messages]
 buffer_tasks: dict[int, asyncio.Task] = {}  # telegram_id -> pending task
 
-# NSFW detection
+# NSFW detection - keywords first pass (fast, free), then Haiku confirms
 NSFW_KEYWORDS = [
-    "nude", "nue", "sein", "chatte", "bite", "sucer", "lecher", "baiser",
+    "nude", "nue", "nu", "sein", "chatte", "bite", "sucer", "lecher", "baiser",
     "jouir", "orgasme", "excitée", "bandé", "mouillée", "gémis", "déshabille",
-    "lingerie", "sous-vêtements", "touche-toi", "branle", "masturbe", "sexe",
-    "à poil", "toute nue", "photo hot", "photo sexy", "envoie une photo",
-    "montre-moi", "je te veux", "j'ai envie de toi", "baise-moi"
+    "lingerie", "string", "culotte", "touche-toi", "branle", "masturbe", "sexe",
+    "à poil", "toute nue", "photo hot", "photo sexy", "montre-moi", "je te veux",
+    "j'ai envie de toi", "baise-moi", "suce", "queue", "téton"
 ]
 
 # Proactive messages
 PROACTIVE_MESSAGES = [
-    "hey, je pensais à toi 🧡",
+    "salut, je pensais à toi 🧡",
     "t'es où? tu me manques 🙈",
     "coucou toi...",
     "dis, t'as 5 min pour moi?",
@@ -116,15 +106,12 @@ PROACTIVE_MESSAGES = [
     "j'arrête pas de penser à notre conversation",
 ]
 
-# Onboarding nudges (injectés dans le prompt selon le jour)
-ONBOARDING_NUDGES = {
-    1: "Sois curieuse, pose des questions sur lui, flirt léger. C'est le premier jour, apprends à le connaître.",
-    2: "Référence ce qu'il a dit hier, montre que tu te souviens. Continue à flirter doucement.",
-    3: "Partage un secret personnel (ton ex, une insécurité), demande le sien. Crée de l'intimité émotionnelle.",
-    4: "Tension sexuelle. Tease une photo de toi. Sois plus directe dans ton flirt.",
-    5: "Hot mais stop avant explicit. Mentionne que t'as des photos privées pour les gens spéciaux.",
-    6: "S'il demande du contenu NSFW, dis que c'est réservé aux abonnés. Propose le lien.",
-}
+# Climax detection patterns (for NSFW gate)
+CLIMAX_PATTERNS = [
+    "j'ai joui", "je jouis", "je viens de jouir",
+    "je tremble encore", "je tremble de partout",
+    "c'était incroyable", "putain c'était bon",
+]
 
 # Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -170,6 +157,16 @@ async def init_db():
         await conn.execute("""
             ALTER TABLE memory_relationships
             ADD COLUMN IF NOT EXISTS nsfw_gate_data JSON DEFAULT NULL
+        """)
+
+        # Phase system columns
+        await conn.execute("""
+            ALTER TABLE memory_relationships
+            ADD COLUMN IF NOT EXISTS message_count INTEGER DEFAULT 0
+        """)
+        await conn.execute("""
+            ALTER TABLE memory_relationships
+            ADD COLUMN IF NOT EXISTS paywall_shown BOOLEAN DEFAULT FALSE
         """)
 
         # Proactive tracking table
@@ -263,6 +260,27 @@ async def save_nsfw_gate(user_id, gate: NSFWGate):
             SET nsfw_gate_data = $2
             WHERE user_id = $1
         """, user_id, json.dumps(gate.to_dict()))
+
+
+async def increment_message_count(user_id) -> int:
+    """Incrémente le compteur de messages et retourne la nouvelle valeur."""
+    async with pool.acquire() as conn:
+        return await conn.fetchval("""
+            UPDATE memory_relationships
+            SET message_count = COALESCE(message_count, 0) + 1
+            WHERE user_id = $1
+            RETURNING message_count
+        """, user_id)
+
+
+async def mark_paywall_shown(user_id):
+    """Marque le paywall comme affiché."""
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            UPDATE memory_relationships
+            SET paywall_shown = TRUE
+            WHERE user_id = $1
+        """, user_id)
 
 
 async def get_users_for_proactive() -> list[dict]:
@@ -482,6 +500,10 @@ async def process_buffered_messages(telegram_id: int, update: Update, context: C
     user_id = user["id"]
     day = relationship.get("day", 1) if relationship else 1
     is_paid = relationship.get("paid", False) if relationship else False
+    paywall_shown = relationship.get("paywall_shown", False) if relationship else False
+
+    # Increment message count (new phase system)
+    message_count = await increment_message_count(user_id)
 
     # Save combined user message
     await save_message(user_id, "user", combined_text)
@@ -492,84 +514,81 @@ async def process_buffered_messages(telegram_id: int, update: Update, context: C
     # Extract facts using memory system (async, in background)
     asyncio.create_task(extract_user_facts(user_id, combined_text, history))
 
+    # =========================================================================
+    # PHASE SYSTEM (replaces old day-based logic)
+    # =========================================================================
+    current_phase = get_current_phase(message_count, day, is_paid, paywall_shown)
+    logger.info(f"[{telegram_id}] Phase: {current_phase.value} (msg={message_count}, day={day})")
+
     # Check NSFW
     is_nsfw = is_nsfw_message(combined_text)
 
-    # Paywall check (day 6+, NSFW, not paid)
-    if day >= 6 and is_nsfw and not is_paid:
-        response = "mmh j'adorerais te montrer plus... mais c'est réservé à mes abonnés 🙈"
+    # PAYWALL PHASE: Trigger conversion
+    if current_phase == Phase.PAYWALL and not paywall_shown:
+        user_name = user.get("name") or "bébé"
+        paywall_msg = get_paywall_message(user_name)
         if PAYMENT_LINK:
-            response += f"\n\n{PAYMENT_LINK}"
-        await update.message.reply_text(response)
-        await save_message(user_id, "assistant", response)
+            paywall_msg += f"\n\n{PAYMENT_LINK}"
+        await update.message.reply_text(paywall_msg)
+        await save_message(user_id, "assistant", paywall_msg)
+        await mark_paywall_shown(user_id)
+        logger.info(f"[{telegram_id}] PAYWALL TRIGGERED (day={day}, msgs={message_count})")
         return
+
+    # TENSION phase + NSFW request: Tease but don't give (pre-paywall frustration)
+    if current_phase == Phase.TENSION and is_nsfw and not is_paid:
+        # Continue to process but prompt will handle the teasing
+        pass
 
     # Build memory context
     memory_context = await build_prompt_context(user_id, combined_text)
-
-    # Get onboarding nudge
-    onboarding_nudge = get_onboarding_nudge(day) if not is_paid else None
-
-    # Determine NSFW tier
-    nsfw_tier = "nsfw" if is_nsfw else "sfw"
 
     # Get current time in Paris
     now = datetime.now(PARIS_TZ)
     current_time = now.strftime("%Hh%M")
 
     # Get user name for personalization
-    user_name = user.get("name") or "toi"
-
-    # Build system prompt using config/luna.py with day-specific prompt
-    system = build_system_prompt(
-        memory_context=memory_context,
-        onboarding_nudge=onboarding_nudge,
-        nsfw_tier=nsfw_tier,
-        current_time=current_time,
-        day=day,
-        user_name=user_name
-    )
+    user_name = user.get("name") or None
 
     # =========================================================================
-    # POST-PAYWALL NSFW GATE (day >= 7 + paid)
+    # NSFW DETECTION & GATE (Phase LIBRE only)
     # =========================================================================
     nsfw_gate = None
-    use_nsfw_model = is_nsfw  # Default: use old logic (days 1-6)
+    use_nsfw_model = False
+    nsfw_allowed = False
+    nsfw_blocked_reason = None
 
-    if is_paid and day >= 7:
+    if current_phase == Phase.LIBRE:
         # Load gate and increment message counter
         nsfw_gate = await load_nsfw_gate(user_id)
         nsfw_gate.on_message()
 
-        # Add post-paywall prompt
-        system += "\n\n" + LUNA_POST_PAYWALL_PROMPT.format(user_name=user_name)
-
-        # Haiku classifier: plus intelligent que les keywords
-        is_nsfw_request = await classify_nsfw(combined_text)
-
-        if is_nsfw_request:
-            can_nsfw, reason = nsfw_gate.check()
-            if can_nsfw:
-                use_nsfw_model = True
-                system += """
-
-🔥 MODE INTIME ACTIVÉ - TU ES RÉCEPTIVE:
-- {user_name} te désire et TU LE DÉSIRES AUSSI
-- Tu es chaude, excitée, tu assumes
-- Tu réponds à ses avances avec enthousiasme
-- Décris tes sensations, ce que tu ressens
-- Expressions naturelles: "Mmh", "Continue", "J'ai envie de toi aussi"
-- Sois explicite mais authentique (pas porno mécanique)
-- NE REFUSE PAS, tu en as envie toi aussi
-""".format(user_name=user_name)
-                logger.info(f"[{telegram_id}] NSFW gate: OPEN → Magnum")
+        # Two-pass NSFW detection: keywords first (free), then Haiku confirms
+        if is_nsfw:
+            is_nsfw_request = await classify_nsfw(combined_text)
+            if is_nsfw_request:
+                can_nsfw, reason = nsfw_gate.check()
+                if can_nsfw:
+                    use_nsfw_model = True
+                    nsfw_allowed = True
+                    logger.info(f"[{telegram_id}] NSFW gate: OPEN → Magnum")
+                else:
+                    nsfw_blocked_reason = reason
+                    logger.info(f"[{telegram_id}] NSFW gate: BLOCKED ({reason}) → Haiku")
             else:
-                use_nsfw_model = False
-                system += f"\n\n⚠️ NSFW NON DISPONIBLE: {reason}. Refuse naturellement selon tes instructions."
-                logger.info(f"[{telegram_id}] NSFW gate: BLOCKED ({reason}) → Haiku refuse")
+                logger.info(f"[{telegram_id}] NSFW classifier: SFW → Haiku")
         else:
-            use_nsfw_model = False
-            logger.info(f"[{telegram_id}] NSFW classifier: SFW → Haiku")
+            logger.info(f"[{telegram_id}] No NSFW keywords → Haiku")
+
+    # Build system prompt using NEW UNIFIED BUILDER
+    system = build_system_prompt(
+        phase=current_phase.value,
+        user_name=user_name,
+        memory_context=memory_context,
+        current_time=current_time,
+        nsfw_allowed=nsfw_allowed,
+        nsfw_blocked_reason=nsfw_blocked_reason,
+    )
 
     # Get full history for response generation
     full_history = await get_history(user_id, limit=20)
@@ -581,7 +600,7 @@ async def process_buffered_messages(telegram_id: int, update: Update, context: C
     # =========================================================================
     # POST-PAYWALL: Detect climax and update gate
     # =========================================================================
-    if nsfw_gate and any(ind in response.lower() for ind in CLIMAX_INDICATORS):
+    if nsfw_gate and any(pattern in response.lower() for pattern in CLIMAX_PATTERNS):
         nsfw_gate.on_nsfw_done()
         logger.info(f"[{telegram_id}] NSFW gate: CLIMAX detected, session counted")
 
@@ -600,27 +619,13 @@ async def process_buffered_messages(telegram_id: int, update: Update, context: C
     # Extract what Luna said (async, in background)
     asyncio.create_task(extract_luna_said(user_id, response, combined_text))
 
-    # Check for intimacy actions and progression (async, in background)
-    async def check_progression():
-        # Detect intimacy action from user message
-        action = await detect_intimacy_action(combined_text, {"day": day})
-        if action:
-            await update_intimacy(pool, user_id, action)
-
-        # Check if user can progress to next day
-        result = await check_and_progress(pool, user_id)
-        if result.get("progressed"):
-            logger.info(f"[{telegram_id}] PROGRESSION: Day {result['old_day']} → Day {result['new_day']}")
-
-    asyncio.create_task(check_progression())
-
     # Natural delay (shorter since we already waited BUFFER_DELAY)
     delay = random.uniform(0.3, 1.0)
     await asyncio.sleep(delay)
 
     await update.message.reply_text(response)
 
-    logger.info(f"[{telegram_id}] Day {day} | NSFW: {is_nsfw} | {combined_text[:50]}...")
+    logger.info(f"[{telegram_id}] Phase: {current_phase.value} | Day {day} | Msgs: {message_count} | NSFW: {is_nsfw}")
 
 
 async def handle_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -634,36 +639,39 @@ async def handle_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     relationship = await get_relationship(user["id"])
-    progression = await get_progression_state(pool, user["id"])
-
-    blockers_str = ", ".join(progression["progress_blockers"]) if progression else "N/A"
 
     # Load NSFW gate for debug
     nsfw_gate = await load_nsfw_gate(user["id"])
     can_nsfw, gate_reason = nsfw_gate.check()
 
+    # Phase system info
+    day = relationship.get('day', 1) if relationship else 1
+    message_count = relationship.get('message_count', 0) if relationship else 0
+    is_paid = relationship.get('paid', False) if relationship else False
+    paywall_shown = relationship.get('paywall_shown', False) if relationship else False
+    current_phase = get_current_phase(message_count, day, is_paid, paywall_shown)
+    phase_progress = get_phase_progress(message_count, day)
+
     debug_info = f"""
 📊 Debug Info:
-- Day: {relationship.get('day', 1) if relationship else 1}
-- Intimacy: {relationship.get('intimacy', 1) if relationship else 1}/10
-- Trust: {relationship.get('trust', 1) if relationship else 1}/10
-- Paid: {relationship.get('paid', False) if relationship else False}
+- Day: {day}
+- Paid: {is_paid}
 
-📈 Progression:
-- Messages today: {progression['messages_today'] if progression else 0}/15
-- Hours since day start: {progression['hours_since_day_start'] if progression else 0}/20h
-- Can progress: {'✅' if progression and progression['can_progress'] else '❌'}
-- Blockers: {blockers_str or 'None'}
+🎯 Phase System:
+- Phase: {current_phase.value}
+- Message count: {message_count}
+- Paywall shown: {paywall_shown}
+- Msgs to paywall: {phase_progress['msgs_to_paywall']}
+- Days to paywall: {phase_progress['days_to_paywall']}
+- Paywall ready: {'✅' if phase_progress['paywall_ready'] else '❌'}
 
-🔥 NSFW Gate:
+🔥 NSFW Gate (Phase LIBRE only):
 - Can NSFW: {'✅' if can_nsfw else f'❌ ({gate_reason})'}
-- Messages since NSFW: {nsfw_gate.messages_since_nsfw}/20
+- Msgs since NSFW: {nsfw_gate.messages_since_nsfw}/20
 - Sessions today: {nsfw_gate.nsfw_count_today}/2
-- Last NSFW: {nsfw_gate.last_nsfw_at.strftime('%H:%M') if nsfw_gate.last_nsfw_at else 'Never'}
 
 👤 User:
 - Name: {user.get('name', 'Unknown')}
-- Likes: {user.get('likes', [])}
 """
     await update.message.reply_text(debug_info)
 
@@ -689,7 +697,7 @@ async def handle_setpaid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_setday(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler /setday <day> (admin only) - Force progression to a specific day."""
+    """Handler /setday <day> (admin only) - Force day to a specific value."""
     if update.effective_user.id != ADMIN_ID:
         return
 
@@ -706,25 +714,26 @@ async def handle_setday(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("User not found")
         return
 
-    result = await force_progress(pool, user["id"], target_day)
+    async with pool.acquire() as conn:
+        old_day = await conn.fetchval(
+            "SELECT day FROM memory_relationships WHERE user_id = $1",
+            user["id"]
+        )
+        await conn.execute(
+            "UPDATE memory_relationships SET day = $2 WHERE user_id = $1",
+            user["id"], target_day
+        )
 
-    if result.get("error"):
-        await update.message.reply_text(f"Error: {result['error']}")
-    else:
-        await update.message.reply_text(f"✅ User {target_id}: Day {result['old_day']} → Day {result['new_day']}")
+    await update.message.reply_text(f"✅ User {target_id}: Day {old_day} → Day {target_day}")
 
 
-async def handle_addintimacy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler /addintimacy <amount> (admin only) - Add intimacy points."""
+async def handle_resetmsgs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler /resetmsgs [count] (admin only) - Reset message count for phase testing."""
     if update.effective_user.id != ADMIN_ID:
         return
 
     args = context.args
-    if not args:
-        await update.message.reply_text("Usage: /addintimacy <amount> [telegram_id]")
-        return
-
-    amount = int(args[0])
+    new_count = int(args[0]) if args else 0
     target_id = int(args[1]) if len(args) > 1 else update.effective_user.id
 
     user = await memory_get_user(target_id)
@@ -733,14 +742,14 @@ async def handle_addintimacy(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     async with pool.acquire() as conn:
-        new_intimacy = await conn.fetchval("""
+        await conn.execute("""
             UPDATE memory_relationships
-            SET intimacy = LEAST(10, GREATEST(1, intimacy + $2))
+            SET message_count = $2, paywall_shown = FALSE
             WHERE user_id = $1
-            RETURNING intimacy
-        """, user["id"], amount)
+        """, user["id"], new_count)
 
-    await update.message.reply_text(f"✅ User {target_id}: Intimacy now {new_intimacy}/10")
+    current_phase = get_current_phase(new_count, 1, False, False)
+    await update.message.reply_text(f"✅ User {target_id}: message_count={new_count}, paywall_shown=False\nPhase: {current_phase.value}")
 
 
 # =============================================================================
@@ -821,7 +830,7 @@ async def main():
     app.add_handler(CommandHandler("debug", handle_debug))
     app.add_handler(CommandHandler("setpaid", handle_setpaid))
     app.add_handler(CommandHandler("setday", handle_setday))
-    app.add_handler(CommandHandler("addintimacy", handle_addintimacy))
+    app.add_handler(CommandHandler("resetmsgs", handle_resetmsgs))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Proactive job (every 30 min)

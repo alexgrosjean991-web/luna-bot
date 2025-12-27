@@ -1,6 +1,8 @@
 """
-NSFW Gate - Garde-fous minimalistes
-3 compteurs seulement. Luna gère le reste.
+NSFW Gate - Garde-fous minimalistes (Phase LIBRE only)
+
+3 compteurs seulement. Luna gère le reste via prompt.
+Used only when: Phase == LIBRE and user sends NSFW request.
 """
 
 from datetime import datetime, date
@@ -34,10 +36,10 @@ class NSFWGate:
         if self.nsfw_count_today >= 2:
             return False, "daily_limit"
 
-        # Gate 2: Cooldown 8h
+        # Gate 2: Cooldown 4h (natural for a girlfriend)
         if self.last_nsfw_at:
             hours = (datetime.now() - self.last_nsfw_at).total_seconds() / 3600
-            if hours < 8:
+            if hours < 4:
                 return False, "cooldown"
 
         # Gate 3: 20 messages minimum
