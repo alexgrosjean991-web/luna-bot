@@ -458,6 +458,41 @@ async def extract_unified(
 # STORAGE HELPERS
 # =============================================================================
 
+# Mots qui ne sont PAS des prénoms (nationalités, jobs, etc.)
+INVALID_NAMES = {
+    # Nationalités
+    "français", "francais", "française", "francaise", "sénégalais", "senegalais",
+    "marocain", "algérien", "algerien", "tunisien", "ivoirien", "camerounais",
+    "malien", "guinéen", "guineen", "congolais", "togolais", "béninois", "beninois",
+    "américain", "americain", "anglais", "espagnol", "italien", "allemand",
+    "portugais", "belge", "suisse", "canadien", "brésilien", "bresilien",
+    "africain", "européen", "europeen", "asiatique", "arabe",
+    # Jobs communs
+    "maçon", "macon", "plombier", "électricien", "electricien", "menuisier",
+    "dev", "développeur", "developpeur", "designer", "graphiste", "freelance",
+    # Mots génériques
+    "mec", "gars", "homme", "femme", "fille", "garçon", "garcon", "type",
+    "noir", "blanc", "beur", "rebeu", "renoi", "feuj",
+    "chantier", "travail", "boulot", "taf",
+}
+
+
+def _is_valid_name(value: str) -> bool:
+    """Vérifie si une valeur ressemble à un vrai prénom."""
+    if not value or len(value) < 2 or len(value) > 20:
+        return False
+    # Rejeter les mots invalides
+    if value.lower() in INVALID_NAMES:
+        return False
+    # Doit commencer par une majuscule (prénom classique)
+    if not value[0].isupper():
+        return False
+    # Pas de chiffres
+    if any(c.isdigit() for c in value):
+        return False
+    return True
+
+
 async def _store_user_fact(user_id: UUID, fact: dict, current_user: dict) -> Optional[dict]:
     """Store a user fact after dedup."""
     fact_type = fact.get("type")
@@ -470,6 +505,18 @@ async def _store_user_fact(user_id: UUID, fact: dict, current_user: dict) -> Opt
 
     # Simple fields
     if fact_type in ["name", "age", "job", "location"]:
+        # Validation spéciale pour les noms
+        if fact_type == "name" and not _is_valid_name(str(value)):
+            logger.warning(f"Invalid name rejected: '{value}'")
+            return None
+
+        # Validation pour les locations (rejeter les mots génériques)
+        if fact_type == "location":
+            invalid_locations = {"chantier", "travail", "boulot", "maison", "chez moi", "bureau", "taf"}
+            if str(value).lower() in invalid_locations:
+                logger.warning(f"Invalid location rejected: '{value}'")
+                return None
+
         # Convertir age en int si c'est une string
         if fact_type == "age":
             try:
