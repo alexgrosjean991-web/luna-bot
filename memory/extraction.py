@@ -235,13 +235,112 @@ async def _call_openrouter_with_retry(
 
 
 # =============================================================================
-# SOURCE VERIFICATION HELPERS (FIX #1, #2, #3, #4)
+# SOURCE VERIFICATION HELPERS (FIX #1, #2, #3, #4) + P1 FIXES
 # =============================================================================
+
+# P1 FIX: Synonym mapping - LLM peut normaliser "foot" → "football"
+SYNONYM_MAP = {
+    # Sports
+    "football": ["foot", "ballon", "soccer"],
+    "basketball": ["basket", "nba"],
+    "volleyball": ["volley"],
+    # Jobs
+    "développeur": ["dev", "developpeur", "développeuse", "devs", "programmeur", "codeur"],
+    "graphiste": ["graph", "designer", "designeuse"],
+    "infirmier": ["infirmière", "infirmiere"],
+    "professeur": ["prof", "enseignant", "enseignante"],
+    "ingénieur": ["ingenieur", "ingé", "inge"],
+    "étudiant": ["etudiant", "étudiante", "etudiante"],
+    "médecin": ["medecin", "doc", "docteur", "toubib"],
+    "avocat": ["avocate", "juriste"],
+    "comptable": ["compta"],
+    "commercial": ["commerciale", "vendeur", "vendeuse"],
+    "cuisinier": ["cuisinière", "cuisiniere", "chef", "cuisto"],
+    "serveur": ["serveuse"],
+    # Lieux
+    "paris": ["paname", "pantruche"],
+    "marseille": ["massilia", "om"],
+    "lyon": ["ol", "gones"],
+    # Hobbies
+    "jeux vidéo": ["gaming", "jeux video", "gamer", "jv"],
+    "musique": ["zik", "musiq"],
+    "cinéma": ["cinema", "ciné", "cine", "films"],
+    "lecture": ["lire", "bouquins", "livres"],
+    "cuisine": ["cuisiner", "cook"],
+    "voyage": ["voyager", "voyages"],
+    "photographie": ["photo", "photos"],
+}
+
+# Build reverse map for quick lookup
+SYNONYM_REVERSE = {}
+for canonical, variants in SYNONYM_MAP.items():
+    SYNONYM_REVERSE[canonical] = canonical
+    for v in variants:
+        SYNONYM_REVERSE[v] = canonical
+
+
+def _get_synonyms(word: str) -> set:
+    """Retourne le mot + tous ses synonymes."""
+    word_lower = word.lower()
+    result = {word_lower}
+
+    # Check if word is a canonical form
+    if word_lower in SYNONYM_MAP:
+        result.update(SYNONYM_MAP[word_lower])
+
+    # Check if word is a variant
+    if word_lower in SYNONYM_REVERSE:
+        canonical = SYNONYM_REVERSE[word_lower]
+        result.add(canonical)
+        result.update(SYNONYM_MAP.get(canonical, []))
+
+    return result
+
+
+def _levenshtein_distance(s1: str, s2: str) -> int:
+    """Calcule la distance de Levenshtein entre deux strings."""
+    if len(s1) < len(s2):
+        return _levenshtein_distance(s2, s1)
+
+    if len(s2) == 0:
+        return len(s1)
+
+    previous_row = range(len(s2) + 1)
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (c1 != c2)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+
+    return previous_row[-1]
+
+
+def _fuzzy_match(word: str, text: str, max_distance: int = 2) -> bool:
+    """
+    P1 FIX: Vérifie si un mot est présent dans le texte avec tolérance aux fautes.
+    Utilise Levenshtein avec distance max de 2.
+    """
+    text_words = re.findall(r'\b\w+\b', text.lower())
+    word_lower = word.lower()
+
+    for text_word in text_words:
+        # Skip si trop différent en longueur
+        if abs(len(text_word) - len(word_lower)) > max_distance:
+            continue
+
+        if _levenshtein_distance(word_lower, text_word) <= max_distance:
+            return True
+
+    return False
+
 
 def _verify_in_text(value: str, *texts: str) -> bool:
     """
     Vérifie qu'une valeur apparaît dans au moins un des textes.
-    Utilise une correspondance par mots pour gérer les variations.
+    P1 FIX: Utilise synonymes + fuzzy matching.
     """
     if not value:
         return False
@@ -249,16 +348,36 @@ def _verify_in_text(value: str, *texts: str) -> bool:
     value_lower = value.lower()
     combined = " ".join(t.lower() for t in texts if t)
 
-    # Correspondance directe
+    # 1. Correspondance directe
     if value_lower in combined:
         return True
 
-    # Correspondance par mots clés (min 3 chars)
+    # 2. P1 FIX: Check synonymes
+    synonyms = _get_synonyms(value_lower)
+    for syn in synonyms:
+        if syn in combined:
+            return True
+
+    # 3. P1 FIX: Fuzzy matching pour fautes de frappe (mots >= 4 chars)
+    if len(value_lower) >= 4:
+        if _fuzzy_match(value_lower, combined):
+            return True
+
+    # 4. Correspondance par mots clés (min 3 chars) avec synonymes
     words = [w for w in value_lower.split() if len(w) >= 3]
     if words:
-        matches = sum(1 for w in words if w in combined)
+        matches = 0
+        for w in words:
+            # Check direct + synonyms + fuzzy
+            word_synonyms = _get_synonyms(w)
+            if any(syn in combined for syn in word_synonyms):
+                matches += 1
+            elif len(w) >= 4 and _fuzzy_match(w, combined):
+                matches += 1
+
         # Au moins 50% des mots présents
-        return matches >= len(words) * 0.5
+        if matches >= len(words) * 0.5:
+            return True
 
     return False
 

@@ -1080,6 +1080,66 @@ async def main():
         name="monthly_compression"
     )
 
+    # P1 FIX: Daily DB cleanup (2am Paris time)
+    async def daily_cleanup_job(context):
+        """Nettoie les vieilles données pour éviter la croissance infinie."""
+        try:
+            async with pool.acquire() as conn:
+                # 1. Supprimer conversations > 90 jours
+                conv_deleted = await conn.fetchval("""
+                    WITH deleted AS (
+                        DELETE FROM conversations_simple
+                        WHERE created_at < NOW() - INTERVAL '90 days'
+                        RETURNING id
+                    )
+                    SELECT COUNT(*) FROM deleted
+                """)
+
+                # 2. Supprimer cold events > 180 jours (garder les pinned)
+                events_deleted = await conn.fetchval("""
+                    WITH deleted AS (
+                        DELETE FROM memory_timeline
+                        WHERE tier = 'cold'
+                          AND pinned = FALSE
+                          AND created_at < NOW() - INTERVAL '180 days'
+                        RETURNING id
+                    )
+                    SELECT COUNT(*) FROM deleted
+                """)
+
+                # 3. Limiter inside_jokes à 20 par user
+                jokes_trimmed = await conn.fetchval("""
+                    WITH ranked AS (
+                        SELECT id, user_id,
+                               ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY updated_at DESC) as rn
+                        FROM memory_relationships
+                    ),
+                    to_trim AS (
+                        SELECT id FROM ranked WHERE rn > 20
+                    ),
+                    deleted AS (
+                        DELETE FROM memory_relationships
+                        WHERE id IN (SELECT id FROM to_trim)
+                        RETURNING id
+                    )
+                    SELECT COUNT(*) FROM deleted
+                """)
+
+                if conv_deleted or events_deleted or jokes_trimmed:
+                    logger.info(
+                        f"DB cleanup: {conv_deleted} convs, "
+                        f"{events_deleted} cold events, {jokes_trimmed} jokes trimmed"
+                    )
+
+        except Exception as e:
+            logger.error(f"DB cleanup error: {e}")
+
+    app.job_queue.run_daily(
+        daily_cleanup_job,
+        time=dt_time(2, 0),  # 2:00 AM
+        name="daily_cleanup"
+    )
+
     # Start
     logger.info("Luna Simple Bot with Memory V1 starting...")
     await app.initialize()
