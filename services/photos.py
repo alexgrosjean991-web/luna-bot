@@ -17,7 +17,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from settings import PARIS_TZ, PHOTOS_PATH
+from config.settings import settings
+PARIS_TZ = settings.PARIS_TZ
+PHOTOS_PATH = settings.PHOTOS_PATH
 
 logger = logging.getLogger(__name__)
 

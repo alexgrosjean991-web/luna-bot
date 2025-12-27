@@ -1,7 +1,8 @@
 """Emotional Peaks - Moments émotionnels scriptés pour créer l'attachement."""
 import random
 from datetime import datetime
-from settings import PARIS_TZ
+from config.settings import settings
+PARIS_TZ = settings.PARIS_TZ
 
 # Pics émotionnels par jour (proactifs)
 EMOTIONAL_PEAKS = {

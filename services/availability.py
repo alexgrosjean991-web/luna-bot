@@ -5,7 +5,8 @@ import asyncio
 import logging
 from datetime import datetime
 from telegram import Update, constants
-from settings import PARIS_TZ
+from config.settings import settings
+PARIS_TZ = settings.PARIS_TZ
 
 logger = logging.getLogger(__name__)
 

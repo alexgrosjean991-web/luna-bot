@@ -5,10 +5,16 @@ import random
 import logging
 import httpx
 from pathlib import Path
-from settings import (
-    ANTHROPIC_API_KEY, LLM_MODEL, MAX_TOKENS, ANTHROPIC_API_VERSION,
-    OPENROUTER_API_KEY, OPENROUTER_URL, MAX_TOKENS_PREMIUM
-)
+from config.settings import settings
+
+# Settings aliases
+ANTHROPIC_API_KEY = settings.ANTHROPIC_API_KEY
+LLM_MODEL = settings.HAIKU_MODEL
+MAX_TOKENS = 150
+ANTHROPIC_API_VERSION = "2023-06-01"
+OPENROUTER_API_KEY = settings.OPENROUTER_API_KEY
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+MAX_TOKENS_PREMIUM = 200
 
 # ============== Retry configuration ==============
 MAX_RETRIES = 3

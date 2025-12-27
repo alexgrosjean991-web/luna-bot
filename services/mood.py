@@ -1,7 +1,8 @@
 """Système d'humeurs de Luna - Version complète."""
 import random
 from datetime import datetime
-from settings import PARIS_TZ
+from config.settings import settings
+PARIS_TZ = settings.PARIS_TZ
 
 # Poids de base des humeurs
 BASE_WEIGHTS = {

@@ -17,7 +17,8 @@ from datetime import datetime, timezone
 from dataclasses import dataclass
 from enum import Enum
 
-from settings import PARIS_TZ
+from config.settings import settings
+PARIS_TZ = settings.PARIS_TZ
 
 logger = logging.getLogger(__name__)
 

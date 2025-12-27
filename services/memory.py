@@ -3,7 +3,10 @@ import json
 import logging
 import random
 import httpx
-from settings import ANTHROPIC_API_KEY, ANTHROPIC_API_VERSION
+from config.settings import settings
+ANTHROPIC_API_KEY = settings.ANTHROPIC_API_KEY
+# ANTHROPIC_API_VERSION not in settings, using default
+ANTHROPIC_API_VERSION = "2023-06-01"
 
 logger = logging.getLogger(__name__)
 
