@@ -55,6 +55,14 @@ from services.phases import (
 # Prompt builder
 from prompts.luna import build_system_prompt
 
+# Engagement engine (V7)
+from services.engagement import (
+    VariableRewards,
+    EngagementState,
+    JealousyHandler,
+    ProactiveEngine,
+)
+
 load_dotenv()
 
 # =============================================================================
@@ -94,16 +102,6 @@ NSFW_KEYWORDS = [
     "lingerie", "string", "culotte", "touche-toi", "branle", "masturbe", "sexe",
     "à poil", "toute nue", "photo hot", "photo sexy", "montre-moi", "je te veux",
     "j'ai envie de toi", "baise-moi", "suce", "queue", "téton"
-]
-
-# Proactive messages
-PROACTIVE_MESSAGES = [
-    "salut, je pensais à toi 🧡",
-    "t'es où? tu me manques 🙈",
-    "coucou toi...",
-    "dis, t'as 5 min pour moi?",
-    "je m'ennuie sans toi",
-    "j'arrête pas de penser à notre conversation",
 ]
 
 # Climax detection patterns (for NSFW gate)
@@ -163,6 +161,12 @@ async def init_db():
         await conn.execute("""
             ALTER TABLE memory_relationships
             ADD COLUMN IF NOT EXISTS message_count INTEGER DEFAULT 0
+        """)
+
+        # Engagement state (V7)
+        await conn.execute("""
+            ALTER TABLE memory_relationships
+            ADD COLUMN IF NOT EXISTS engagement_state JSON DEFAULT NULL
         """)
         await conn.execute("""
             ALTER TABLE memory_relationships
@@ -260,6 +264,29 @@ async def save_nsfw_gate(user_id, gate: NSFWGate):
             SET nsfw_gate_data = $2
             WHERE user_id = $1
         """, user_id, json.dumps(gate.to_dict()))
+
+
+async def load_engagement_state(user_id) -> EngagementState:
+    """Charge l'engagement state depuis la DB."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT engagement_state FROM memory_relationships WHERE user_id = $1
+        """, user_id)
+
+        if row and row["engagement_state"]:
+            data = json.loads(row["engagement_state"]) if isinstance(row["engagement_state"], str) else row["engagement_state"]
+            return EngagementState.from_dict(data)
+        return EngagementState()
+
+
+async def save_engagement_state(user_id, state: EngagementState):
+    """Sauvegarde l'engagement state en DB."""
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            UPDATE memory_relationships
+            SET engagement_state = $2
+            WHERE user_id = $1
+        """, user_id, json.dumps(state.to_dict()))
 
 
 async def increment_message_count(user_id) -> int:
@@ -551,6 +578,27 @@ async def process_buffered_messages(telegram_id: int, update: Update, context: C
     user_name = user.get("name") or None
 
     # =========================================================================
+    # ENGAGEMENT SYSTEM (V7)
+    # =========================================================================
+    engagement = await load_engagement_state(user_id)
+
+    # Get affection level (variable rewards)
+    affection_level = VariableRewards.get_affection_level(engagement.reward, current_phase.value)
+    affection_modifier = VariableRewards.get_modifier(affection_level)
+    VariableRewards.update_state(engagement.reward, affection_level)
+
+    # Check for jealousy trigger
+    jealousy_modifier = None
+    if JealousyHandler.detect(combined_text):
+        jealousy_modifier = JealousyHandler.get_modifier(current_phase.value)
+        logger.info(f"[{telegram_id}] Jealousy detected: {current_phase.value}")
+
+    # Combine modifiers for mood override
+    mood_override = affection_modifier
+    if jealousy_modifier:
+        mood_override += f"\n\nJALOUSIE: {jealousy_modifier}"
+
+    # =========================================================================
     # NSFW DETECTION & GATE (Phase LIBRE only)
     # =========================================================================
     nsfw_gate = None
@@ -588,6 +636,7 @@ async def process_buffered_messages(telegram_id: int, update: Update, context: C
         current_time=current_time,
         nsfw_allowed=nsfw_allowed,
         nsfw_blocked_reason=nsfw_blocked_reason,
+        mood=mood_override,  # V7: Variable rewards + jealousy
     )
 
     # Get full history for response generation
@@ -608,6 +657,9 @@ async def process_buffered_messages(telegram_id: int, update: Update, context: C
     if nsfw_gate:
         await save_nsfw_gate(user_id, nsfw_gate)
 
+    # Save engagement state (V7)
+    await save_engagement_state(user_id, engagement)
+
     # Clean response
     response = response.strip()
     if len(response) > 500:
@@ -625,7 +677,7 @@ async def process_buffered_messages(telegram_id: int, update: Update, context: C
 
     await update.message.reply_text(response)
 
-    logger.info(f"[{telegram_id}] Phase: {current_phase.value} | Day {day} | Msgs: {message_count} | NSFW: {is_nsfw}")
+    logger.info(f"[{telegram_id}] Phase: {current_phase.value} | Day {day} | Msgs: {message_count} | Affection: {affection_level} | NSFW: {is_nsfw}")
 
 
 async def handle_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -643,6 +695,9 @@ async def handle_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Load NSFW gate for debug
     nsfw_gate = await load_nsfw_gate(user["id"])
     can_nsfw, gate_reason = nsfw_gate.check()
+
+    # Load engagement state (V7)
+    engagement = await load_engagement_state(user["id"])
 
     # Phase system info
     day = relationship.get('day', 1) if relationship else 1
@@ -664,6 +719,13 @@ async def handle_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
 - Msgs to paywall: {phase_progress['msgs_to_paywall']}
 - Days to paywall: {phase_progress['days_to_paywall']}
 - Paywall ready: {'✅' if phase_progress['paywall_ready'] else '❌'}
+
+🎰 Engagement (V7):
+- Msgs since high reward: {engagement.reward.messages_since_reward}
+- Reward streak: {engagement.reward.reward_streak}
+- Photos today: {engagement.photo.photos_sent_today}
+- Voices today: {engagement.voice.voices_sent_today}
+- Proactives today: {engagement.proactive.proactives_today}
 
 🔥 NSFW Gate (Phase LIBRE only):
 - Can NSFW: {'✅' if can_nsfw else f'❌ ({gate_reason})'}
@@ -757,7 +819,7 @@ async def handle_resetmsgs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =============================================================================
 
 async def send_proactive_messages(context: ContextTypes.DEFAULT_TYPE):
-    """Job pour envoyer des messages proactifs."""
+    """Job pour envoyer des messages proactifs (V7: uses ProactiveEngine)."""
     now = datetime.now(PARIS_TZ)
 
     # Pas la nuit (9h-23h)
@@ -770,44 +832,49 @@ async def send_proactive_messages(context: ContextTypes.DEFAULT_TYPE):
         try:
             telegram_id = user["telegram_id"]
             user_id = user["id"]
+            user_name = user.get("name")
+            day = user.get("day", 1)
+            is_paid = user.get("paid", False)
+            message_count = user.get("message_count", 0) or 0
 
-            # Get proactive tracking
-            tracking = await get_proactive_tracking(user_id)
+            # Get current phase
+            current_phase = get_current_phase(message_count, day, is_paid, False)
 
-            # Reset counter si nouveau jour
-            if tracking.get("proactive_date") != now.date():
-                await update_proactive_tracking(user_id, proactive_count_today=0, proactive_date=now.date())
-                tracking["proactive_count_today"] = 0
+            # Load engagement state
+            engagement = await load_engagement_state(user_id)
 
-            # Check limite 2/jour
-            if (tracking.get("proactive_count_today") or 0) >= 2:
+            # Calculate hours since last user message
+            updated_at = user.get("updated_at")
+            if updated_at:
+                if updated_at.tzinfo is None:
+                    updated_at = updated_at.replace(tzinfo=PARIS_TZ)
+                hours_since_last = (now - updated_at).total_seconds() / 3600
+            else:
+                hours_since_last = 0
+
+            # V7: Use ProactiveEngine to decide
+            proactive_context = ProactiveEngine.should_send(
+                state=engagement.proactive,
+                phase=current_phase.value,
+                hours_since_last_user_msg=hours_since_last,
+                message_count=message_count,
+            )
+
+            if not proactive_context:
                 continue
 
-            # Check 4h depuis dernier message Luna
-            if tracking.get("last_proactive_at"):
-                last_proactive = tracking["last_proactive_at"]
-                if last_proactive.tzinfo is None:
-                    last_proactive = last_proactive.replace(tzinfo=PARIS_TZ)
-                if (now - last_proactive).total_seconds() < 4 * 3600:
-                    continue
+            # Get message from engine
+            message = ProactiveEngine.get_message(proactive_context, user_name)
 
-            # Random chance (pas tous les users à chaque run)
-            if random.random() > 0.3:
-                continue
-
-            # Send message
-            message = random.choice(PROACTIVE_MESSAGES)
+            # Send
             await context.bot.send_message(chat_id=telegram_id, text=message)
             await save_message(user_id, "assistant", message)
 
-            # Update counters
-            await update_proactive_tracking(
-                user_id,
-                proactive_count_today=(tracking.get("proactive_count_today") or 0) + 1,
-                last_proactive_at=now
-            )
+            # Update state
+            ProactiveEngine.update_state(engagement.proactive)
+            await save_engagement_state(user_id, engagement)
 
-            logger.info(f"Proactive sent to {telegram_id}: {message}")
+            logger.info(f"Proactive ({proactive_context}) sent to {telegram_id}: {message}")
 
         except Exception as e:
             logger.error(f"Proactive error for user {user['id']}: {e}")
