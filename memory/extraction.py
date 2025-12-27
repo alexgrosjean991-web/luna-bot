@@ -389,37 +389,32 @@ async def extract_unified(
         if not isinstance(fact, dict):
             continue
 
-        # ANTI-HALLUCINATION: Pour name/job/location, vérifier qu'il apparaît VRAIMENT dans le message
-        if fact.get("type") in ["name", "job", "location"]:
-            fact_value = str(fact.get("value", "")).lower()
-            # Pour les jobs, vérifier aussi des variantes courantes
-            if fact.get("type") == "job":
-                # Variantes: "dev" -> "développeur", etc.
-                job_variants = {
-                    "développeur": ["dev", "développeur", "developpeur", "devloppeur"],
-                    "électricien": ["électricien", "electricien"],
-                    "scientifique": ["scientifique", "science", "chercheur"],
-                }
-                found = False
-                for variant_list in job_variants.values():
-                    if fact_value in [v.lower() for v in variant_list]:
-                        for variant in variant_list:
-                            if variant.lower() in user_message.lower():
-                                found = True
-                                break
-                    if found:
-                        break
-                # Si pas de variante trouvée, chercher directement
-                if not found and fact_value not in user_message.lower():
-                    logger.warning(f"HALLUCINATION blocked: job '{fact.get('value')}' not found in user message")
-                    skipped.append(f"job hallucination: {fact.get('value')}")
-                    continue
+        # ANTI-HALLUCINATION: Vérifier que la valeur apparaît VRAIMENT dans le message
+        # S'applique à TOUS les types de facts
+        fact_value = str(fact.get("value", "")).lower()
+        fact_type = fact.get("type", "")
+
+        if fact_value:
+            # Chercher la valeur ou ses mots principaux dans le message
+            message_lower = user_message.lower()
+            found = False
+
+            # Vérification directe
+            if fact_value in message_lower:
+                found = True
             else:
-                # Pour name et location, vérification directe
-                if fact_value and fact_value not in user_message.lower():
-                    logger.warning(f"HALLUCINATION blocked: '{fact.get('value')}' not found in user message")
-                    skipped.append(f"{fact.get('type')} hallucination: {fact.get('value')}")
-                    continue
+                # Pour les valeurs multi-mots, chercher les mots clés (min 3 chars)
+                words = [w for w in fact_value.split() if len(w) >= 3]
+                if words:
+                    # Au moins 50% des mots doivent être présents
+                    matches = sum(1 for w in words if w in message_lower)
+                    if matches >= len(words) * 0.5:
+                        found = True
+
+            if not found:
+                logger.warning(f"HALLUCINATION blocked: {fact_type} '{fact.get('value')}' not found in user message")
+                skipped.append(f"{fact_type} hallucination: {fact.get('value')}")
+                continue
 
         if fact.get("value") and fact.get("importance", 0) >= min_importance:
             fact_stored = await _store_user_fact(user_id, fact, current_user)
