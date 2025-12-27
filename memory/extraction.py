@@ -154,6 +154,18 @@ RÈGLES D'IMPORTANCE:
 - "je bosse comme X" / "je suis X (métier)" → job
 - "j'habite à X" → location
 - "j'aime X" / "je kiffe X" → like
+
+⛔⛔⛔ RÈGLE ABSOLUE - ZÉRO HALLUCINATION ⛔⛔⛔
+- JAMAIS inventer un prénom si l'utilisateur ne l'a pas dit EXPLICITEMENT
+- JAMAIS deviner des informations
+- Si le message ne contient PAS "je m'appelle X" ou "moi c'est X" → user_facts: []
+- En cas de doute → user_facts: []
+
+EXEMPLES:
+❌ "Je vais à la gym" → user_facts: [] (pas de prénom mentionné!)
+❌ "Salut ça va?" → user_facts: [] (rien de personnel)
+✅ "Je m'appelle Lucas" → user_facts: [{{"type": "name", "value": "Lucas"}}]
+✅ "Moi c'est Lucas, dev à Lyon" → user_facts: [{{"type": "name", "value": "Lucas"}}, {{"type": "job", "value": "dev"}}]
 """
 
 
