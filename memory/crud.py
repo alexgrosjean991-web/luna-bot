@@ -569,7 +569,7 @@ async def add_calendar_date(
         """, user_id, date, json.dumps(new_date))
 
 
-async def get_upcoming_dates(user_id: UUID, days_ahead: int = 7) -> list[dict]:
+async def get_upcoming_dates(user_id: UUID, days_ahead: int = 7, limit: int = 10) -> list[dict]:
     """Récupère les dates dans les N prochains jours."""
     today = datetime.now().strftime("%Y-%m-%d")
     future = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
@@ -586,7 +586,10 @@ async def get_upcoming_dates(user_id: UUID, days_ahead: int = 7) -> list[dict]:
         if isinstance(dates, str):
             dates = json.loads(dates)
 
-        return [d for d in dates if today <= d.get("date", "") <= future]
+        upcoming = [d for d in dates if today <= d.get("date", "") <= future]
+        # Sort by date and limit
+        upcoming.sort(key=lambda d: d.get("date", ""))
+        return upcoming[:limit]
 
 
 async def cleanup_past_dates(user_id: UUID) -> int:
