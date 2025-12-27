@@ -80,6 +80,13 @@ EXEMPLES CONCRETS:
 ✅ CORRECT - User dit "j'adore le gaming":
   user_fact: {{"type": "like", "value": "gaming", "importance": 6}}
 
+⚠️ ATTENTION FAMILLE/AMIS - NE PAS CONFONDRE:
+- "Je m'appelle Lucas" → user_fact: {{"type": "name", "value": "Lucas"}} ✅
+- "Mon frère s'appelle Pierre" → user_fact: {{"type": "family", "value": "frère: Pierre"}} ✅
+- "Mon pote Alex" → user_fact: {{"type": "family", "value": "ami: Alex"}} ✅
+- JAMAIS mettre le nom d'un proche dans "type": "name"!
+- Le "name" c'est UNIQUEMENT le prénom de L'UTILISATEUR lui-même
+
 MESSAGE UTILISATEUR:
 {user_message}
 
